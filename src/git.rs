@@ -46,22 +46,18 @@ fn extract_version_from_tag(
     package_name: &str,
     is_root: bool,
 ) -> Option<Version> {
-    if let Some(ref re) = tag_re {
-        if let Some(caps) = re.captures(tag_name) {
-            if let Ok(v) = Version::parse(&caps["version"]) {
-                return Some(v);
-            }
-        }
+    if let Some(re) = tag_re
+        && let Some(caps) = re.captures(tag_name)
+        && let Ok(v) = Version::parse(&caps["version"])
+    {
+        return Some(v);
     }
 
-    // Legacy fallback for sub-packages: `{name}@{version}`
-    if !is_root {
-        let legacy_prefix = format!("{}@", package_name);
-        if let Some(version_str) = tag_name.strip_prefix(&legacy_prefix) {
-            if let Ok(v) = Version::parse(version_str) {
-                return Some(v);
-            }
-        }
+    if !is_root
+        && let Some(version_str) = tag_name.strip_prefix(&format!("{}@", package_name))
+        && let Ok(v) = Version::parse(version_str)
+    {
+        return Some(v);
     }
 
     None

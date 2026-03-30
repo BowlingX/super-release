@@ -59,10 +59,10 @@ fn find_package_jsons(root: &Path, dir: &Path, packages: &mut Vec<Package>) -> R
                 continue;
             }
             find_package_jsons(root, &path, packages)?;
-        } else if path.file_name().map(|f| f == "package.json").unwrap_or(false) {
-            if let Some(pkg) = parse_package_json(root, &path)? {
-                packages.push(pkg);
-            }
+        } else if path.file_name().map(|f| f == "package.json").unwrap_or(false)
+            && let Some(pkg) = parse_package_json(root, &path)?
+        {
+            packages.push(pkg);
         }
     }
     Ok(())
