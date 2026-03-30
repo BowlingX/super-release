@@ -38,13 +38,17 @@ pub fn determine_releases(
     config: &Config,
     branch_ctx: &BranchContext,
 ) -> Result<Vec<PackageRelease>> {
-    // 1. Resolve per-package tag info first (needs repo handle).
+    // 1. Build tag index once (single revwalk + single tag enumeration).
+    let pkg_pairs: Vec<(String, bool)> = packages
+        .iter()
+        .map(|p| (p.name.clone(), p.is_root))
+        .collect();
+    let tag_index = git::TagIndex::build(repo, &pkg_pairs, config, branch_ctx)?;
+
     let tag_infos: Vec<PkgTagInfo> = packages
         .iter()
         .map(|pkg| {
-            let latest =
-                git::find_latest_version(repo, &pkg.name, pkg.is_root, config, branch_ctx)?;
-            match latest {
+            match tag_index.latest_version(&pkg.name) {
                 Some((tag_name, ver)) => {
                     let oid = git::tag_to_oid(repo, &tag_name)?;
                     Ok(PkgTagInfo {

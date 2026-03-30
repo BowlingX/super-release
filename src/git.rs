@@ -4,42 +4,122 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use semver::Version;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::commit::{parse_conventional_commit, ConventionalCommit};
 use crate::config::{BranchContext, Config};
 
-/// Get all tags that look like version tags for a given package,
-/// filtered by the current branch context:
-/// - Stable branches only see stable (non-prerelease) tags.
-/// - Prerelease branches see their own channel's tags AND stable tags.
-/// - Maintenance branches see only their major-version range.
-pub fn get_version_tags(
-    repo: &Repository,
-    package_name: &str,
-    is_root: bool,
-    config: &Config,
-    branch_ctx: &BranchContext,
-) -> Result<HashMap<String, Version>> {
-    let mut tags = HashMap::new();
-    let tag_names = repo.tag_names(None)?;
-
-    let tag_re = config.tag_match_regex(package_name, is_root);
-
-    for tag_name in tag_names.iter().flatten() {
-        let version = extract_version_from_tag(tag_name, &tag_re);
-        let Some(v) = version else { continue };
-
-        if version_matches_branch(&v, branch_ctx) {
-            tags.insert(tag_name.to_string(), v);
-        }
-    }
-
-    Ok(tags)
+/// All resolved tag information, computed once and shared across packages.
+pub struct TagIndex {
+    /// Tags matching per package: package_name → Vec<(tag_name, version)>
+    per_package: HashMap<String, Vec<(String, Version)>>,
 }
 
-/// Extract a semver Version from a tag name using the configured regex.
+impl TagIndex {
+    /// Build a tag index for all packages. Enumerates tags once, resolves
+    /// reachability once, and groups by package.
+    pub fn build(
+        repo: &Repository,
+        packages: &[(String, bool)], // (name, is_root) pairs
+        config: &Config,
+        branch_ctx: &BranchContext,
+    ) -> Result<Self> {
+        let tag_names = repo.tag_names(None)?;
+        let pkg_regexes: Vec<(&str, bool, Option<regex::Regex>)> = packages
+            .iter()
+            .map(|(name, is_root)| (name.as_str(), *is_root, config.tag_match_regex(name, *is_root)))
+            .collect();
+
+        // Collect candidate tags (matching regex + branch filter) with their OIDs
+        struct Candidate {
+            tag_name: String,
+            tag_oid: git2::Oid,
+            pkg_name: String,
+            version: Version,
+        }
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut pending_oids: HashSet<git2::Oid> = HashSet::new();
+        let mut oid_cache: HashMap<String, Option<git2::Oid>> = HashMap::new();
+
+        for tag_name in tag_names.iter().flatten() {
+            // Resolve OID once per tag name, not per package
+            let tag_oid = match oid_cache.get(tag_name) {
+                Some(cached) => *cached,
+                None => {
+                    let oid = tag_to_oid(repo, tag_name)?;
+                    oid_cache.insert(tag_name.to_string(), oid);
+                    oid
+                }
+            };
+            let Some(tag_oid) = tag_oid else { continue };
+
+            for (pkg_name, _is_root, tag_re) in &pkg_regexes {
+                let Some(v) = extract_version_from_tag(tag_name, tag_re) else {
+                    continue;
+                };
+                if !version_matches_branch(&v, branch_ctx) {
+                    continue;
+                }
+                pending_oids.insert(tag_oid);
+                candidates.push(Candidate {
+                    tag_name: tag_name.to_string(),
+                    tag_oid,
+                    pkg_name: pkg_name.to_string(),
+                    version: v,
+                });
+            }
+        }
+
+        // Single revwalk from HEAD to check which candidate tag OIDs are reachable.
+        // Stops as soon as all candidates are resolved OR after MAX_WALK commits
+        // (tags beyond that depth are almost certainly reachable if they exist).
+        const MAX_WALK: usize = 10_000;
+        let mut reachable: HashSet<git2::Oid> = HashSet::new();
+        if !pending_oids.is_empty() {
+            let mut remaining = pending_oids.clone();
+            let mut revwalk = repo.revwalk()?;
+            revwalk.push_head()?;
+
+            for (i, oid) in revwalk.enumerate() {
+                let oid = oid?;
+                if remaining.remove(&oid) {
+                    reachable.insert(oid);
+                    if remaining.is_empty() {
+                        break;
+                    }
+                }
+                if i >= MAX_WALK {
+                    // Assume remaining tags are reachable (deep history)
+                    reachable.extend(remaining.drain());
+                    break;
+                }
+            }
+        }
+
+        let mut per_package: HashMap<String, Vec<(String, Version)>> = HashMap::new();
+        for c in candidates {
+            if reachable.contains(&c.tag_oid) {
+                per_package
+                    .entry(c.pkg_name)
+                    .or_default()
+                    .push((c.tag_name, c.version));
+            }
+        }
+
+        Ok(TagIndex { per_package })
+    }
+
+    /// Find the latest version tag for a package.
+    pub fn latest_version(&self, package_name: &str) -> Option<(String, Version)> {
+        self.per_package
+            .get(package_name)?
+            .iter()
+            .max_by(|a, b| a.1.cmp(&b.1))
+            .cloned()
+    }
+}
+
 fn extract_version_from_tag(
     tag_name: &str,
     tag_re: &Option<regex::Regex>,
@@ -49,37 +129,17 @@ fn extract_version_from_tag(
     Version::parse(&caps["version"]).ok()
 }
 
-/// Check if a version is relevant for the current branch context.
 fn version_matches_branch(v: &Version, branch_ctx: &BranchContext) -> bool {
     match &branch_ctx.prerelease {
-        None => {
-            // Stable branch: only stable (non-prerelease) versions
-            v.pre.is_empty()
-        }
+        None => v.pre.is_empty(),
         Some(channel) => {
-            // Prerelease branch: accept stable versions OR this channel's prereleases
             if v.pre.is_empty() {
                 return true;
             }
-            // Match if the prerelease starts with our channel
-            // e.g. channel "test-foo" matches "test-foo.1", "test-foo.2"
             let pre = v.pre.as_str();
-            pre == channel
-                || pre.starts_with(&format!("{}.", channel))
+            pre == channel || pre.starts_with(&format!("{}.", channel))
         }
     }
-}
-
-/// Find the latest version tag for a package and return the tag name + version.
-pub fn find_latest_version(
-    repo: &Repository,
-    package_name: &str,
-    is_root: bool,
-    config: &Config,
-    branch_ctx: &BranchContext,
-) -> Result<Option<(String, Version)>> {
-    let tags = get_version_tags(repo, package_name, is_root, config, branch_ctx)?;
-    Ok(tags.into_iter().max_by(|a, b| a.1.cmp(&b.1)))
 }
 
 struct RawCommit {
@@ -88,7 +148,6 @@ struct RawCommit {
 }
 
 /// Get all commits from HEAD, optionally stopping at a tag boundary.
-/// Shows a progress bar and parallelizes diff computation with thread-local repos.
 pub fn get_commits_since(
     repo: &Repository,
     repo_path: &Path,
@@ -148,7 +207,6 @@ pub fn get_commits_since(
     Ok(results)
 }
 
-/// Build commits in parallel using thread-local Repository handles.
 fn parallel_build_commits(
     raw_commits: Vec<RawCommit>,
     repo_path: &Path,

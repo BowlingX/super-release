@@ -750,3 +750,143 @@ plugins:
         .success()
         .stdout(predicate::str::contains("not configured for releases"));
 }
+
+#[test]
+fn test_merge_with_higher_version_uses_merged_base() {
+    // Scenario: test-feature branch merges develop which has v2.0.0.
+    // After merge, the base version should be v2.0.0, not v1.0.0.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches:
+  - main
+  - name: "test-*"
+    prerelease: true
+plugins:
+  - name: git-tag
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    // Advance main to v2.0.0
+    fs::write(root.join("index.js"), "// v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat!: breaking change"]);
+    git(root, &["tag", "-a", "v2.0.0", "-m", "v2.0.0"]);
+
+    // Create test branch from current main (which has v2.0.0)
+    git(root, &["checkout", "-b", "test-feature"]);
+
+    // Add a feature on the test branch
+    fs::write(root.join("index.js"), "// v2 + test feature").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: test feature"]);
+
+    // Should use v2.0.0 as base (reachable via merge), not v1.0.0
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Failed:\n{}", stdout);
+    // Base should be 2.0.0, next prerelease should be 2.1.0-test-feature.1
+    assert!(
+        stdout.contains("2.1.0-test-feature.1"),
+        "Should use v2.0.0 as base:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_unreachable_tag_on_other_branch_ignored() {
+    // Scenario: v2.0.0 exists on main but was never merged into test-feature.
+    // test-feature should use v1.0.0 as its base, not v2.0.0.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches:
+  - main
+  - name: "test-*"
+    prerelease: true
+plugins:
+  - name: git-tag
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    // Create test branch BEFORE main advances
+    git(root, &["checkout", "-b", "test-feature"]);
+
+    // Go back to main and create v2.0.0 (unreachable from test-feature)
+    git(root, &["checkout", "main"]);
+    fs::write(root.join("index.js"), "// v2 on main").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat!: breaking on main"]);
+    git(root, &["tag", "-a", "v2.0.0", "-m", "v2.0.0"]);
+
+    // Switch back to test-feature and add a commit
+    git(root, &["checkout", "test-feature"]);
+    fs::write(root.join("index.js"), "// test work").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: test work"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Failed:\n{}", stdout);
+    // Should use v1.0.0 as base (v2.0.0 is not reachable), so next is 1.1.0-test-feature.1
+    assert!(
+        stdout.contains("1.1.0-test-feature.1"),
+        "Should use v1.0.0 as base (v2.0.0 unreachable):\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("2."),
+        "Should NOT reference v2.x:\n{}",
+        stdout
+    );
+}
