@@ -1,4 +1,5 @@
 pub mod changelog;
+pub mod git_commit;
 pub mod git_tag;
 pub mod npm;
 
@@ -17,7 +18,7 @@ pub struct PluginContext<'a> {
 }
 
 /// Trait that all release plugins must implement.
-pub trait Plugin {
+pub trait Plugin: Send + Sync {
     /// Plugin name for matching against config.
     fn name(&self) -> &str;
 
@@ -54,7 +55,20 @@ pub fn create_plugin(name: &str) -> Option<Box<dyn Plugin>> {
     match name {
         "changelog" => Some(Box::new(changelog::ChangelogPlugin)),
         "npm" => Some(Box::new(npm::NpmPlugin)),
+        "git-commit" => Some(Box::new(git_commit::GitCommitPlugin)),
         "git-tag" => Some(Box::new(git_tag::GitTagPlugin)),
         _ => None,
     }
+}
+
+/// Helper to deserialize plugin options from the JSON value.
+/// Returns the default if options are null or missing.
+pub fn parse_options<T: serde::de::DeserializeOwned + Default>(
+    config: &PluginConfig,
+) -> Result<T> {
+    if config.options.is_null() {
+        return Ok(T::default());
+    }
+    serde_json::from_value(config.options.clone())
+        .map_err(|e| anyhow::anyhow!("Invalid options for plugin '{}': {}", config.name, e))
 }

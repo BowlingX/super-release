@@ -35,4 +35,5 @@ exclude:
 plugins:
   - name: changelog
   - name: npm
+  - name: git-commit
   - name: git-tag

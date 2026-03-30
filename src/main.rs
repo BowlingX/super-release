@@ -3,6 +3,8 @@ mod config;
 mod git;
 mod package;
 mod plugin;
+mod pm;
+mod resolver;
 mod version;
 
 use anyhow::{Context, Result};
@@ -75,8 +77,10 @@ fn main() -> Result<()> {
     }
     printfl!();
 
-    let mut packages = package::discover_packages(&repo_root)?;
-    package::resolve_local_dependencies(&mut packages);
+    let pkg_resolver = resolver::create_resolver("node")
+        .expect("node resolver must exist");
+    let mut packages = pkg_resolver.discover(&repo_root)?;
+    pkg_resolver.resolve_dependencies(&mut packages);
 
     if !cli.package.is_empty() {
         packages.retain(|p| {

@@ -1,5 +1,7 @@
 use anyhow::Result;
 use console::style;
+use rayon::prelude::*;
+use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -9,7 +11,7 @@ use git_cliff_core::commit::Commit as CliffCommit;
 use git_cliff_core::config::Config as CliffConfig;
 use git_cliff_core::release::Release as CliffRelease;
 
-use super::{Plugin, PluginConfig, PluginContext};
+use super::{parse_options, Plugin, PluginConfig, PluginContext};
 use crate::commit::ConventionalCommit;
 use crate::package::Package;
 use crate::version::PackageRelease;
@@ -18,8 +20,25 @@ static CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
     "".parse().expect("Failed to load git-cliff default config")
 });
 
-/// Max lines to show in dry-run changelog preview.
-const DRY_RUN_MAX_LINES: usize = 20;
+/// Options for the changelog plugin.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ChangelogOptions {
+    /// Output filename (default: "CHANGELOG.md")
+    #[serde(default = "default_filename")]
+    pub filename: String,
+
+    /// Max lines to show in dry-run preview (default: 20)
+    #[serde(default = "default_preview_lines")]
+    pub preview_lines: usize,
+}
+
+fn default_filename() -> String {
+    "CHANGELOG.md".into()
+}
+
+fn default_preview_lines() -> usize {
+    20
+}
 
 pub struct ChangelogPlugin;
 
@@ -31,43 +50,59 @@ impl Plugin for ChangelogPlugin {
     fn prepare(
         &self,
         ctx: &PluginContext,
-        _config: &PluginConfig,
+        config: &PluginConfig,
         packages: &[Package],
         releases: &[PackageRelease],
     ) -> Result<()> {
-        for release in releases {
-            let pkg_dir = packages
-                .iter()
-                .find(|p| p.name == release.package_name)
-                .map(|p| ctx.repo_root.join(&p.path))
-                .unwrap_or_else(|| ctx.repo_root.to_path_buf());
+        let opts: ChangelogOptions = parse_options(config)?;
 
-            let changelog_path = pkg_dir.join("CHANGELOG.md");
-            let notes = generate_release_notes(release)?;
+        // Generate changelogs per package in parallel
+        let results: Vec<(String, String, String)> = releases
+            .par_iter()
+            .map(|release| {
+                let pkg_dir = packages
+                    .iter()
+                    .find(|p| p.name == release.package_name)
+                    .map(|p| ctx.repo_root.join(&p.path))
+                    .unwrap_or_else(|| ctx.repo_root.to_path_buf());
+
+                let changelog_path = pkg_dir.join(&opts.filename);
+                let notes = generate_release_notes(release)?;
+                Ok((
+                    release.package_name.clone(),
+                    changelog_path.to_string_lossy().to_string(),
+                    notes,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        // Write/print results sequentially (filesystem writes + stdout)
+        for (pkg_name, changelog_path, notes) in &results {
+            let path = Path::new(changelog_path);
 
             if ctx.dry_run {
                 let total_lines = notes.lines().count();
                 let preview: String = notes
                     .lines()
-                    .take(DRY_RUN_MAX_LINES)
+                    .take(opts.preview_lines)
                     .map(|l| format!("    {}", style(l).dim()))
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                println!("  [changelog] Would update {}", changelog_path.display());
+                println!("  [changelog] Would update {} ({})", path.display(), pkg_name);
                 println!("{}", preview);
-                if total_lines > DRY_RUN_MAX_LINES {
+                if total_lines > opts.preview_lines {
                     println!(
                         "    {} (+{} more lines)",
                         style("...").dim(),
-                        total_lines - DRY_RUN_MAX_LINES
+                        total_lines - opts.preview_lines
                     );
                 }
                 continue;
             }
 
-            update_changelog(&changelog_path, &notes)?;
-            println!("  [changelog] Updated {}", changelog_path.display());
+            update_changelog(path, notes)?;
+            println!("  [changelog] Updated {}", path.display());
         }
         Ok(())
     }

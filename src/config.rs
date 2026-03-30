@@ -157,6 +157,10 @@ fn default_plugins() -> Vec<PluginConfig> {
             options: serde_json::Value::Null,
         },
         PluginConfig {
+            name: "git-commit".into(),
+            options: serde_json::Value::Null,
+        },
+        PluginConfig {
             name: "git-tag".into(),
             options: serde_json::Value::Null,
         },
@@ -304,7 +308,7 @@ mod tests {
         assert_eq!(config.branches[1].name(), "master");
         assert_eq!(config.tag_format, "v{version}");
         assert_eq!(config.tag_format_package, "{name}/v{version}");
-        assert_eq!(config.plugins.len(), 3);
+        assert_eq!(config.plugins.len(), 4);
     }
 
     #[test]

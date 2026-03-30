@@ -177,15 +177,53 @@ To migrate from semantic-release's tag format, set `tag_format_package: "{name}@
 
 #### `plugins`
 
-Ordered list of plugins to execute. Each plugin runs its `prepare` phase (all plugins), then its `publish` phase (all plugins).
+Ordered list of plugins to execute. Each plugin runs its `prepare` phase, then its `publish` phase. Each plugin accepts an `options` object for customization.
+
+Default: `[changelog, npm, git-commit, git-tag]`
+
+```yaml
+plugins:
+  - name: changelog
+    options:
+      filename: CHANGELOG.md      # output file per package (default: CHANGELOG.md)
+      preview_lines: 20           # max lines shown in dry-run (default: 20)
+
+  - name: npm
+    options:
+      access: public              # npm access level (default: "public")
+      registry: https://registry.npmjs.org  # custom registry URL
+      tag: next                   # npm dist-tag (default: "latest")
+      publish_args:               # extra args passed to the publish command
+        - "--otp=123456"
+      skip_publish: false         # only update package.json version, don't publish
+      package_manager: yarn       # force specific PM (default: auto-detect)
+
+  - name: git-commit
+    options:
+      # Commit message template. Placeholders:
+      #   {releases} - comma-separated list: "@acme/core@1.1.0, @acme/utils@1.0.1"
+      #   {summary}  - one per line: "  - @acme/core 1.0.0 -> 1.1.0"
+      #   {count}    - number of packages released
+      message: "chore(release): {releases} [skip ci]"
+      push: false                 # push after commit (default: false)
+      remote: origin              # git remote (default: "origin")
+      paths:                      # paths to stage (default: ["."])
+        - "."
+
+  - name: git-tag
+    options:
+      push: false                 # push tags to remote after creation (default: false)
+      remote: origin              # git remote to push to (default: "origin")
+```
 
 | Plugin | Prepare | Publish |
 |---|---|---|
-| `changelog` | Generates/updates `CHANGELOG.md` per package | -- |
-| `npm` | Updates `package.json` versions + interdependencies | Runs `npm publish` in topological order |
-| `git-tag` | -- | Creates annotated git tags |
+| `changelog` | Generates/updates changelog per package (parallel) | -- |
+| `npm` | Updates `package.json` versions (auto-detects npm/yarn/pnpm) | Publishes packages (parallel within dependency levels) |
+| `git-commit` | -- | Stages changed files, commits with release message, optionally pushes |
+| `git-tag` | -- | Creates annotated git tags, optionally pushes |
 
-Default: `[changelog, npm, git-tag]`
+The default plugin order ensures: changelogs and version bumps are written first, then committed, then tagged.
 
 #### `packages`
 
