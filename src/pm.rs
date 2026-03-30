@@ -124,12 +124,11 @@ impl PackageManager {
 /// Format: `"yarn@4.0.0"`, `"pnpm@9.0.0"`, `"npm@10.0.0"`
 fn detect_from_package_json(repo_root: &Path) -> Result<Option<PackageManager>> {
     let manifest = repo_root.join("package.json");
-    if !manifest.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(&manifest)
-        .with_context(|| format!("reading {}", manifest.display()))?;
+    let content = match std::fs::read_to_string(&manifest) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", manifest.display())),
+    };
 
     #[derive(Deserialize)]
     struct Root {

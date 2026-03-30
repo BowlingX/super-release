@@ -191,20 +191,18 @@ pub fn load_config(repo_root: &Path) -> Result<Config> {
 
     for candidate in &candidates {
         let path = repo_root.join(candidate);
-        if path.exists() {
-            return load_config_from_path(&path);
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                let config: Config = serde_saphyr::from_str(&content)
+                    .with_context(|| format!("parsing config file: {}", path.display()))?;
+                return Ok(config);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(anyhow::anyhow!("reading {}: {}", path.display(), e)),
         }
     }
 
     Ok(Config::default())
-}
-
-fn load_config_from_path(path: &Path) -> Result<Config> {
-    let content = std::fs::read_to_string(path)
-        .with_context(|| format!("reading config file: {}", path.display()))?;
-    let config: Config = serde_saphyr::from_str(&content)
-        .with_context(|| format!("parsing config file: {}", path.display()))?;
-    Ok(config)
 }
 
 /// Resolve the repository root from a starting path.
@@ -219,33 +217,28 @@ pub fn find_repo_root(start: &Path) -> Result<(PathBuf, git2::Repository)> {
 }
 
 /// Detect the current branch and resolve it against the branch config.
+/// Returns `None` if the current branch is not configured for releases.
 pub fn resolve_branch_context(
     repo: &git2::Repository,
     config: &Config,
-) -> Result<BranchContext> {
+) -> Result<Option<BranchContext>> {
     let head = repo.head().context("Failed to get HEAD")?;
     let branch_name = head
         .shorthand()
         .unwrap_or("HEAD")
         .to_string();
 
-    // Find matching branch config
     for bc in &config.branches {
         if glob_match(bc.name(), &branch_name) {
-            return Ok(BranchContext {
+            return Ok(Some(BranchContext {
                 prerelease: bc.resolve_prerelease(&branch_name),
                 branch_name: branch_name.clone(),
                 maintenance: bc.is_maintenance(),
-            });
+            }));
         }
     }
 
-    // No matching branch config — allow release on any branch with stable defaults
-    Ok(BranchContext {
-        branch_name,
-        prerelease: None,
-        maintenance: false,
-    })
+    Ok(None)
 }
 
 /// Match a string against a glob pattern using the `glob-match` crate.
@@ -257,25 +250,16 @@ pub fn glob_match(pattern: &str, value: &str) -> bool {
 }
 
 impl Config {
-    /// Format a tag name for a package version using the configured template.
-    pub fn format_tag(&self, package_name: &str, version: &semver::Version, is_root: bool) -> String {
-        let template = if is_root {
-            &self.tag_format
-        } else {
-            &self.tag_format_package
-        };
-        render_tag_template(template, package_name, &version.to_string())
+    fn tag_template(&self, is_root: bool) -> &str {
+        if is_root { &self.tag_format } else { &self.tag_format_package }
     }
 
-    /// Build a regex that matches tags produced by the configured template,
-    /// capturing the version portion. Returns `None` if the template has no `{version}`.
+    pub fn format_tag(&self, package_name: &str, version: &semver::Version, is_root: bool) -> String {
+        render_tag_template(self.tag_template(is_root), package_name, &version.to_string())
+    }
+
     pub fn tag_match_regex(&self, package_name: &str, is_root: bool) -> Option<regex::Regex> {
-        let template = if is_root {
-            &self.tag_format
-        } else {
-            &self.tag_format_package
-        };
-        tag_template_to_regex(template, package_name)
+        tag_template_to_regex(self.tag_template(is_root), package_name)
     }
 }
 
@@ -432,6 +416,32 @@ branches:
 
         assert_eq!(config.branches[4].name(), "1.x");
         assert!(config.branches[4].is_maintenance());
+    }
+
+    #[test]
+    fn test_prerelease_true_never_produces_literal_true() {
+        let yaml = r#"
+branches:
+  - name: "feature-*"
+    prerelease: true
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        let branch = &config.branches[0];
+
+        let channel = branch.resolve_prerelease("feature-abc").unwrap();
+        assert_eq!(channel, "feature-abc");
+        assert_ne!(channel, "true");
+    }
+
+    #[test]
+    fn test_prerelease_false_is_stable() {
+        let yaml = r#"
+branches:
+  - name: staging
+    prerelease: false
+"#;
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
+        assert!(config.branches[0].resolve_prerelease("staging").is_none());
     }
 
     #[test]

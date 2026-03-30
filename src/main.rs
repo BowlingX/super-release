@@ -118,7 +118,19 @@ fn main() -> Result<()> {
     }
     printfl!();
 
-    let branch_ctx = config::resolve_branch_context(&repo, &cfg)?;
+    let branch_ctx = match config::resolve_branch_context(&repo, &cfg)? {
+        Some(ctx) => ctx,
+        None => {
+            let head = repo.head().ok().and_then(|h| h.shorthand().map(String::from));
+            let branch = head.as_deref().unwrap_or("HEAD");
+            printfl!(
+                "{} Branch '{}' is not configured for releases, skipping.",
+                style(">>").bold().yellow(),
+                style(branch).bold()
+            );
+            return Ok(());
+        }
+    };
 
     if cli.verbose || cli.dry_run {
         let channel_info = if let Some(ref pre) = branch_ctx.prerelease {

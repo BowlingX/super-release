@@ -704,3 +704,49 @@ plugins:
         .success()
         .stdout(predicate::str::contains("1.1.0-test-foo.3"));
 }
+
+#[test]
+fn test_unconfigured_branch_skips_release() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "develop"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+
+    // Only test-* branches configured — develop is NOT listed
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches:
+  - name: "test-*"
+    prerelease: true
+plugins:
+  - name: git-tag
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    fs::write(root.join("index.js"), "// v1.1").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: new feature"]);
+
+    super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("not configured for releases"));
+}

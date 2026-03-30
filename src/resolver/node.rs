@@ -15,8 +15,6 @@ struct PackageJson {
     dependencies: Option<HashMap<String, String>>,
     #[serde(rename = "devDependencies")]
     dev_dependencies: Option<HashMap<String, String>>,
-    #[serde(rename = "peerDependencies")]
-    peer_dependencies: Option<HashMap<String, String>>,
     private: Option<bool>,
 }
 
@@ -31,7 +29,8 @@ impl PackageResolver for NodeResolver {
     }
 
     fn resolve_dependencies(&self, packages: &mut [Package]) {
-        let names: Vec<String> = packages.iter().map(|p| p.name.clone()).collect();
+        let names: std::collections::HashSet<String> =
+            packages.iter().map(|p| p.name.clone()).collect();
         for pkg in packages.iter_mut() {
             let mut local = HashMap::new();
             for (dep_name, dep_version) in

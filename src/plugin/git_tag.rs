@@ -46,6 +46,7 @@ impl Plugin for GitTagPlugin {
         releases: &[PackageRelease],
     ) -> Result<()> {
         let opts: GitTagOptions = parse_options(config)?;
+        let mut created_tags = Vec::new();
 
         for release in releases {
             let tag_name = ctx.config.format_tag(
@@ -68,27 +69,28 @@ impl Plugin for GitTagPlugin {
                 continue;
             }
 
-            if tag_exists(ctx.repo, &tag_name) {
+            if git::tag_to_oid(ctx.repo, &tag_name)?.is_some() {
                 println!("  [git-tag] Tag already exists: {}, skipping", tag_name);
                 continue;
             }
 
             git::create_tag(ctx.repo, &tag_name, &message)?;
-            println!("  [git-tag] Created tag: {}", tag_name);
+            created_tags.push(tag_name);
+            println!("  [git-tag] Created tag: {}", created_tags.last().unwrap());
         }
 
-        if !ctx.dry_run && opts.push && !releases.is_empty() {
-            println!("  [git-tag] Pushing tags to {} ...", opts.remote);
-            let output = std::process::Command::new("git")
-                .arg("push")
-                .arg(&opts.remote)
-                .arg("--tags")
-                .current_dir(ctx.repo_root)
-                .output()?;
+        if !ctx.dry_run && opts.push && !created_tags.is_empty() {
+            println!("  [git-tag] Pushing {} tag(s) to {} ...", created_tags.len(), opts.remote);
+            let mut cmd = std::process::Command::new("git");
+            cmd.arg("push").arg(&opts.remote).current_dir(ctx.repo_root);
+            for tag in &created_tags {
+                cmd.arg(tag);
+            }
+            let output = cmd.output()?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                anyhow::bail!("git push --tags failed: {}", stderr);
+                anyhow::bail!("git push failed: {}", stderr);
             }
             println!("  [git-tag] Tags pushed");
         }
@@ -97,6 +99,3 @@ impl Plugin for GitTagPlugin {
     }
 }
 
-fn tag_exists(repo: &git2::Repository, tag_name: &str) -> bool {
-    repo.find_reference(&format!("refs/tags/{}", tag_name)).is_ok()
-}

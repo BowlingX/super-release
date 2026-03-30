@@ -150,10 +150,10 @@ pub fn generate_release_notes(release: &PackageRelease) -> Result<String> {
 }
 
 fn update_changelog(path: &Path, new_content: &str) -> Result<()> {
-    let existing = if path.exists() {
-        fs::read_to_string(path)?
-    } else {
-        String::new()
+    let existing = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
     };
 
     let header = "# Changelog\n\n";

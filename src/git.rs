@@ -84,8 +84,7 @@ pub fn find_latest_version(
 
 struct RawCommit {
     oid: git2::Oid,
-    hash8: String,
-    message: String,
+    parsed: ConventionalCommit,
 }
 
 /// Get all commits from HEAD, optionally stopping at a tag boundary.
@@ -114,12 +113,8 @@ pub fn get_commits_since(
         let message = commit.message().unwrap_or("").to_string();
         let hash8 = oid.to_string()[..8].to_string();
 
-        if parse_conventional_commit(&hash8, &message).is_some() {
-            raw_commits.push(RawCommit {
-                oid,
-                hash8,
-                message,
-            });
+        if let Some(parsed) = parse_conventional_commit(&hash8, &message) {
+            raw_commits.push(RawCommit { oid, parsed });
         }
     }
 
@@ -188,8 +183,7 @@ fn parallel_build_commits(
 }
 
 fn build_commit(repo: &Repository, rc: RawCommit) -> Result<ConventionalCommit> {
-    let mut parsed =
-        parse_conventional_commit(&rc.hash8, &rc.message).expect("already validated in phase 1");
+    let mut parsed = rc.parsed;
     parsed.files_changed = get_changed_files(repo, rc.oid)?;
     Ok(parsed)
 }
@@ -222,7 +216,6 @@ fn get_changed_files(repo: &Repository, oid: git2::Oid) -> Result<Vec<String>> {
     Ok(files)
 }
 
-/// Create a git tag.
 pub fn create_tag(repo: &Repository, tag_name: &str, message: &str) -> Result<()> {
     let head = repo.head()?.peel_to_commit()?;
     let sig = repo.signature()?;
@@ -230,7 +223,6 @@ pub fn create_tag(repo: &Repository, tag_name: &str, message: &str) -> Result<()
     Ok(())
 }
 
-/// Resolve a tag name to a commit oid. Returns None if the tag doesn't exist.
 pub fn tag_to_oid(repo: &Repository, tag_name: &str) -> Result<Option<git2::Oid>> {
     match repo.resolve_reference_from_short_name(tag_name) {
         Ok(reference) => {
