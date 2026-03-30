@@ -15,6 +15,7 @@ clap = { version = "4.6", features = ["derive"] }
 console = "0.16"
 glob-match = "0.2"
 git2 = "0.20"
+openssl-sys = { version = "0.9", features = ["vendored"], optional = true }
 git-cliff-core = { version = "2.12", default-features = false }
 indicatif = "0.18"
 rayon = "1.11"
@@ -23,6 +24,9 @@ semver = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde-saphyr = "0.0.22"
+
+[features]
+vendored-openssl = ["dep:openssl-sys"]
 
 [dev-dependencies]
 assert_cmd = "2.2"
