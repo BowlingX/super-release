@@ -71,28 +71,20 @@ impl TagIndex {
             }
         }
 
-        // Single revwalk from HEAD to check which candidate tag OIDs are reachable.
-        // Stops as soon as all candidates are resolved OR after MAX_WALK commits
-        // (tags beyond that depth are almost certainly reachable if they exist).
-        const MAX_WALK: usize = 10_000;
+        // Single revwalk from HEAD — stops as soon as all candidate OIDs are found.
         let mut reachable: HashSet<git2::Oid> = HashSet::new();
         if !pending_oids.is_empty() {
-            let mut remaining = pending_oids.clone();
+            let mut remaining = pending_oids;
             let mut revwalk = repo.revwalk()?;
             revwalk.push_head()?;
 
-            for (i, oid) in revwalk.enumerate() {
+            for oid in revwalk {
                 let oid = oid?;
                 if remaining.remove(&oid) {
                     reachable.insert(oid);
                     if remaining.is_empty() {
                         break;
                     }
-                }
-                if i >= MAX_WALK {
-                    // Assume remaining tags are reachable (deep history)
-                    reachable.extend(remaining.drain());
-                    break;
                 }
             }
         }
