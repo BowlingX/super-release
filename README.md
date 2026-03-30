@@ -1,6 +1,6 @@
 # super-release
 
-A fast [semantic-release](https://semantic-release.gitbook.io/semantic-release) alternative for monorepos, written in Rust.
+A fast and opinionated [semantic-release](https://semantic-release.gitbook.io/semantic-release) alternative for monorepos, written in Rust.
 
 Analyzes [conventional commits](https://www.conventionalcommits.org/) to determine version bumps, generate changelogs, update `package.json` files, publish to npm, and create git tags -- across all packages in a monorepo, in parallel.
 

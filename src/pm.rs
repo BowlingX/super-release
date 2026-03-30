@@ -71,6 +71,7 @@ impl PackageManager {
         access: &str,
         registry: Option<&str>,
         tag: Option<&str>,
+        provenance: bool,
         extra_args: &[String],
     ) -> Command {
         let mut cmd = match self {
@@ -102,7 +103,11 @@ impl PackageManager {
             cmd.arg("--tag").arg(t);
         }
 
-        // pnpm and npm need --no-git-checks in CI when the working tree may be dirty
+        if provenance {
+            cmd.arg("--provenance");
+        }
+
+
         match self {
             PackageManager::Pnpm => {
                 cmd.arg("--no-git-checks");

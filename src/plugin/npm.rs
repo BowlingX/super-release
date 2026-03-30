@@ -28,6 +28,10 @@ pub struct NpmOptions {
     #[serde(default)]
     pub tag: Option<String>,
 
+    /// Enable npm provenance (--provenance). Requires npm 9.5+ and a supported CI.
+    #[serde(default)]
+    pub provenance: bool,
+
     /// Force a specific package manager (overrides auto-detection).
     #[serde(default)]
     pub package_manager: Option<PackageManager>,
@@ -40,6 +44,7 @@ impl Default for NpmOptions {
             registry: None,
             publish_args: Vec::new(),
             tag: None,
+            provenance: false,
             package_manager: None,
         }
     }
@@ -208,6 +213,7 @@ fn publish_one(
         &opts.access,
         opts.registry.as_deref(),
         dist_tag,
+        opts.provenance,
         &opts.publish_args,
     );
 

@@ -1,0 +1,248 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/bowlingx/super-release/main/schema.json",
+  "title": "super-release configuration",
+  "description": "Configuration file for super-release (.release.yaml)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "branches": {
+      "description": "Branch configurations for release channels",
+      "type": "array",
+      "default": ["main", "master"],
+      "items": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Simple branch name (stable releases)"
+          },
+          {
+            "$ref": "#/$defs/branchConfig"
+          }
+        ]
+      }
+    },
+    "tag_format": {
+      "description": "Tag format template for root packages. Placeholders: {version}, {name}",
+      "type": "string",
+      "default": "v{version}",
+      "examples": ["v{version}", "{name}-v{version}", "release-{version}"]
+    },
+    "tag_format_package": {
+      "description": "Tag format template for sub-packages in monorepos. Placeholders: {version}, {name}",
+      "type": "string",
+      "default": "{name}/v{version}",
+      "examples": ["{name}/v{version}", "{name}@{version}"]
+    },
+    "packages": {
+      "description": "Glob patterns to include. Only matching packages are released. Default: all",
+      "type": "array",
+      "items": { "type": "string" },
+      "examples": [["@acme/*"], ["@acme/core", "@acme/utils"]]
+    },
+    "exclude": {
+      "description": "Glob patterns to exclude from releasing",
+      "type": "array",
+      "default": [],
+      "items": { "type": "string" },
+      "examples": [["my-monorepo-root", "@acme/internal-*"]]
+    },
+    "plugins": {
+      "description": "Ordered list of plugins to execute",
+      "type": "array",
+      "default": [
+        { "name": "changelog" },
+        { "name": "npm" },
+        { "name": "git-commit" },
+        { "name": "git-tag" }
+      ],
+      "items": {
+        "$ref": "#/$defs/pluginConfig"
+      }
+    }
+  },
+  "$defs": {
+    "branchConfig": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Branch name or glob pattern (e.g. \"main\", \"beta\", \"test-*\", \"1.x\")"
+        },
+        "prerelease": {
+          "description": "Prerelease channel. true = use branch name as channel, string = fixed channel name, false/absent = stable",
+          "oneOf": [
+            { "type": "boolean" },
+            { "type": "string" }
+          ],
+          "examples": [true, "beta", "next", "rc"]
+        },
+        "maintenance": {
+          "type": "boolean",
+          "default": false,
+          "description": "Maintenance branch. Major version is capped, breaking changes become minor bumps"
+        }
+      }
+    },
+    "pluginConfig": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": ["changelog", "npm", "exec", "git-commit", "git-tag"],
+          "description": "Plugin name"
+        },
+        "options": {
+          "description": "Plugin-specific options",
+          "oneOf": [
+            { "$ref": "#/$defs/changelogOptions" },
+            { "$ref": "#/$defs/npmOptions" },
+            { "$ref": "#/$defs/execOptions" },
+            { "$ref": "#/$defs/gitCommitOptions" },
+            { "$ref": "#/$defs/gitTagOptions" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "name": { "const": "changelog" } } },
+          "then": { "properties": { "options": { "$ref": "#/$defs/changelogOptions" } } }
+        },
+        {
+          "if": { "properties": { "name": { "const": "npm" } } },
+          "then": { "properties": { "options": { "$ref": "#/$defs/npmOptions" } } }
+        },
+        {
+          "if": { "properties": { "name": { "const": "exec" } } },
+          "then": { "properties": { "options": { "$ref": "#/$defs/execOptions" } } }
+        },
+        {
+          "if": { "properties": { "name": { "const": "git-commit" } } },
+          "then": { "properties": { "options": { "$ref": "#/$defs/gitCommitOptions" } } }
+        },
+        {
+          "if": { "properties": { "name": { "const": "git-tag" } } },
+          "then": { "properties": { "options": { "$ref": "#/$defs/gitTagOptions" } } }
+        }
+      ]
+    },
+    "changelogOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "filename": {
+          "type": "string",
+          "default": "CHANGELOG.md",
+          "description": "Output filename per package"
+        },
+        "preview_lines": {
+          "type": "integer",
+          "default": 20,
+          "description": "Max lines shown in dry-run preview"
+        }
+      }
+    },
+    "npmOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "access": {
+          "type": "string",
+          "enum": ["public", "restricted"],
+          "default": "public",
+          "description": "npm access level"
+        },
+        "registry": {
+          "type": "string",
+          "description": "Custom registry URL",
+          "format": "uri"
+        },
+        "tag": {
+          "type": "string",
+          "description": "Dist-tag override. Default: auto from prerelease channel"
+        },
+        "provenance": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable npm provenance (--provenance). Requires npm 9.5+ and supported CI"
+        },
+        "publish_args": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Extra args passed to the publish command"
+        },
+        "package_manager": {
+          "type": "string",
+          "enum": ["npm", "yarn", "pnpm"],
+          "description": "Force specific package manager (default: auto-detect)"
+        }
+      }
+    },
+    "execOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prepare_cmd": {
+          "type": "string",
+          "description": "Shell command for prepare phase. Placeholders: {version}, {name}, {channel}"
+        },
+        "publish_cmd": {
+          "type": "string",
+          "description": "Shell command for publish phase. Placeholders: {version}, {name}, {channel}"
+        },
+        "packages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Glob patterns to filter which packages this exec applies to. Empty = all"
+        }
+      }
+    },
+    "gitCommitOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "type": "string",
+          "default": "chore(release): {releases} [skip ci]",
+          "description": "Commit message template. Placeholders: {releases}, {summary}, {count}"
+        },
+        "push": {
+          "type": "boolean",
+          "default": false,
+          "description": "Push to remote after committing"
+        },
+        "remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "Git remote name"
+        },
+        "paths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["."],
+          "description": "Paths to stage before committing"
+        }
+      }
+    },
+    "gitTagOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "push": {
+          "type": "boolean",
+          "default": false,
+          "description": "Push tags to remote after creation"
+        },
+        "remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "Git remote name"
+        }
+      }
+    }
+  }
+}
