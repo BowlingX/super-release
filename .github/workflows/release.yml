@@ -93,15 +93,14 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build super-release
-        run: cargo build --release
-
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      - name: Extract super-release binary
+        run: |
+          tar xzf artifacts/super-release-linux-x86_64/super-release-linux-x86_64.tar.gz
+          chmod +x super-release
 
       - name: Run super-release
         env:
@@ -109,7 +108,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          ./target/release/super-release
+          ./super-release
 
       - name: Push release commit and tags
         run: |

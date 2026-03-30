@@ -7,7 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const { version } = JSON.parse(readFileSync(join(__dirname, "package.json"), "utf8"));
+const { version } = JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8"));
 const REPO = "bowlingx/super-release";
 
 const PLATFORM_MAP = {

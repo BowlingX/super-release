@@ -5,14 +5,14 @@
   "description": "A fast semantic-release alternative for monorepos, written in Rust",
   "license": "MIT",
   "bin": {
-    "super-release": "bin/super-release.js"
+    "super-release": "npm/bin/super-release.js"
   },
   "scripts": {
-    "postinstall": "node install.js"
+    "postinstall": "node npm/install.js"
   },
   "files": [
-    "bin",
-    "install.js",
+    "npm/bin",
+    "npm/install.js",
     "README.md"
   ],
   "repository": {
