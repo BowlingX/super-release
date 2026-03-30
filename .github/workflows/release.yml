@@ -96,7 +96,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
@@ -110,7 +110,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           ./super-release
-
+        env:
+          NPM_CONFIG_PROVENANCE: true
       - name: Push release commit and tags
         run: |
           TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
