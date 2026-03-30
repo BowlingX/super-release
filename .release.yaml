@@ -1,39 +1,15 @@
-# super-release configuration
-# See: super-release --help
+# super-release releases itself
 
-# Branch configurations for release channels.
-# Simple strings are stable branches. Objects can define prerelease/maintenance.
 branches:
   - main
   - master
-  # Prerelease branches produce versions like 2.0.0-beta.1
-  # - name: beta
-  #   prerelease: beta
-  # - name: next
-  #   prerelease: next
-  # Maintenance branches cap the major version (breaking changes -> minor)
-  # - name: "1.x"
-  #   maintenance: true
 
-# Tag format templates. Use {version} and {name} placeholders.
-# tag_format:         used for root packages      (default: "v{version}")
-# tag_format_package: used for monorepo packages   (default: "{name}/v{version}")
-#
-# Examples:
-#   tag_format: "v{version}"                     -> v1.2.3
-#   tag_format: "{name}-v{version}"              -> my-app-v1.2.3
-#   tag_format_package: "{name}@{version}"       -> @acme/core@1.2.3
-#   tag_format_package: "{name}/release/{version}" -> @acme/core/release/1.2.3
 tag_format: "v{version}"
-tag_format_package: "{name}/v{version}"
 
-# Packages to exclude from releasing
-exclude:
-  - monorepo-root
-
-# Plugins execute in order
 plugins:
   - name: changelog
   - name: npm
   - name: git-commit
+    options:
+      message: "chore(release): {releases} [skip ci]"
   - name: git-tag
