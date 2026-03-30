@@ -7,7 +7,7 @@ use crate::package::Package;
 use crate::version::PackageRelease;
 
 /// Options for the git-tag plugin.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GitTagOptions {
     /// Whether to push tags to the remote after creation (default: false)
     #[serde(default)]
@@ -16,6 +16,15 @@ pub struct GitTagOptions {
     /// Git remote to push to (default: "origin")
     #[serde(default = "default_remote")]
     pub remote: String,
+}
+
+impl Default for GitTagOptions {
+    fn default() -> Self {
+        Self {
+            push: false,
+            remote: default_remote(),
+        }
+    }
 }
 
 fn default_remote() -> String {
@@ -59,6 +68,11 @@ impl Plugin for GitTagPlugin {
                 continue;
             }
 
+            if tag_exists(ctx.repo, &tag_name) {
+                println!("  [git-tag] Tag already exists: {}, skipping", tag_name);
+                continue;
+            }
+
             git::create_tag(ctx.repo, &tag_name, &message)?;
             println!("  [git-tag] Created tag: {}", tag_name);
         }
@@ -81,4 +95,8 @@ impl Plugin for GitTagPlugin {
 
         Ok(())
     }
+}
+
+fn tag_exists(repo: &git2::Repository, tag_name: &str) -> bool {
+    repo.find_reference(&format!("refs/tags/{}", tag_name)).is_ok()
 }

@@ -192,10 +192,9 @@ plugins:
     options:
       access: public              # npm access level (default: "public")
       registry: https://registry.npmjs.org  # custom registry URL
-      tag: next                   # npm dist-tag (default: "latest")
+      tag: next                   # dist-tag override (default: auto from prerelease channel)
       publish_args:               # extra args passed to the publish command
         - "--otp=123456"
-      skip_publish: false         # only update package.json version, don't publish
       package_manager: yarn       # force specific PM (default: auto-detect)
 
   - name: git-commit

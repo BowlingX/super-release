@@ -95,21 +95,30 @@ impl Plugin for GitCommitPlugin {
             return Ok(());
         }
 
-        // Stage files
         let mut add_cmd = Command::new("git");
         add_cmd.arg("add").current_dir(ctx.repo_root);
         for path in &opts.paths {
             add_cmd.arg(path);
         }
-        let output = add_cmd
-            .output()
-            .context("Failed to run git add")?;
+        let output = add_cmd.output().context("Failed to run git add")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("git add failed: {}", stderr);
         }
 
-        // Commit
+        // Check if there's anything to commit
+        let has_changes = !Command::new("git")
+            .args(["diff", "--cached", "--quiet"])
+            .current_dir(ctx.repo_root)
+            .status()
+            .context("Failed to check git status")?
+            .success(); // exit code 1 means there are diffs
+
+        if !has_changes {
+            println!("  [git-commit] Nothing to commit");
+            return Ok(());
+        }
+
         let output = Command::new("git")
             .arg("commit")
             .arg("-m")
@@ -120,11 +129,6 @@ impl Plugin for GitCommitPlugin {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // "nothing to commit" is not an error
-            if stderr.contains("nothing to commit") || stderr.contains("no changes added") {
-                println!("  [git-commit] Nothing to commit");
-                return Ok(());
-            }
             anyhow::bail!("git commit failed: {}", stderr);
         }
         println!("  [git-commit] Committed: {}", message);

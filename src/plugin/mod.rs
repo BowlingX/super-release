@@ -15,6 +15,7 @@ pub struct PluginContext<'a> {
     pub repo: &'a git2::Repository,
     pub dry_run: bool,
     pub config: &'a crate::config::Config,
+    pub branch: &'a crate::config::BranchContext,
 }
 
 /// Trait that all release plugins must implement.

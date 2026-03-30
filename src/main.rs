@@ -223,6 +223,7 @@ fn main() -> Result<()> {
         repo: &repo,
         dry_run: cli.dry_run,
         config: &cfg,
+        branch: &branch_ctx,
     };
 
     for plugin_cfg in &cfg.plugins {

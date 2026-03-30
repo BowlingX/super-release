@@ -21,7 +21,7 @@ static CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
 });
 
 /// Options for the changelog plugin.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ChangelogOptions {
     /// Output filename (default: "CHANGELOG.md")
     #[serde(default = "default_filename")]
@@ -30,6 +30,15 @@ pub struct ChangelogOptions {
     /// Max lines to show in dry-run preview (default: 20)
     #[serde(default = "default_preview_lines")]
     pub preview_lines: usize,
+}
+
+impl Default for ChangelogOptions {
+    fn default() -> Self {
+        Self {
+            filename: default_filename(),
+            preview_lines: default_preview_lines(),
+        }
+    }
 }
 
 fn default_filename() -> String {

@@ -10,7 +10,7 @@ use crate::pm::PackageManager;
 use crate::version::PackageRelease;
 
 /// Options for the npm/publish plugin.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NpmOptions {
     /// Access level for publish (default: "public")
     #[serde(default = "default_access")]
@@ -24,18 +24,27 @@ pub struct NpmOptions {
     #[serde(default)]
     pub publish_args: Vec<String>,
 
-    /// Dist-tag (default: "latest"). Set to e.g. "next" for prerelease channels.
+    /// Dist-tag override. By default derived from the prerelease channel
+    /// (e.g. branch "beta" → tag "beta"). On stable branches, omitted (defaults to "latest").
     #[serde(default)]
     pub tag: Option<String>,
-
-    /// Skip publish, only update package.json versions
-    #[serde(default)]
-    pub skip_publish: bool,
 
     /// Force a specific package manager (overrides auto-detection).
     /// Values: "npm", "yarn", "pnpm"
     #[serde(default)]
     pub package_manager: Option<PackageManager>,
+}
+
+impl Default for NpmOptions {
+    fn default() -> Self {
+        Self {
+            access: default_access(),
+            registry: None,
+            publish_args: Vec::new(),
+            tag: None,
+            package_manager: None,
+        }
+    }
 }
 
 fn default_access() -> String {
@@ -50,12 +59,11 @@ impl Plugin for NpmPlugin {
     }
 
     fn verify(&self, ctx: &PluginContext, config: &PluginConfig) -> Result<()> {
-        let opts: NpmOptions = parse_options(config)?;
-
-        if ctx.dry_run || opts.skip_publish {
+        if ctx.dry_run {
             return Ok(());
         }
 
+        let opts: NpmOptions = parse_options(config)?;
         let pm = resolve_pm(ctx, &opts)?;
         pm.verify()
     }
@@ -108,13 +116,14 @@ impl Plugin for NpmPlugin {
         releases: &[PackageRelease],
     ) -> Result<()> {
         let opts: NpmOptions = parse_options(config)?;
-
-        if opts.skip_publish {
-            println!("  [npm] Publish skipped (skip_publish: true)");
-            return Ok(());
-        }
-
         let pm = resolve_pm(ctx, &opts)?;
+
+        // Derive dist-tag: explicit config > prerelease channel > none (PM default = "latest")
+        let dist_tag: Option<&str> = opts
+            .tag
+            .as_deref()
+            .or(ctx.branch.prerelease.as_deref());
+
         let order = topological_sort(packages)?;
         let release_set: HashMap<&str, &PackageRelease> = releases
             .iter()
@@ -125,31 +134,46 @@ impl Plugin for NpmPlugin {
 
         let repo_root = ctx.repo_root;
         let dry_run = ctx.dry_run;
+        let mut errors: Vec<String> = Vec::new();
 
         for level in &levels {
-            if level.len() == 1 {
-                let pkg_name = &level[0];
-                if let Some(release) = release_set.get(pkg_name.as_str()) {
-                    let pkg = packages.iter().find(|p| p.name == *pkg_name).unwrap();
-                    publish_one(repo_root, dry_run, pkg, release, &opts, pm)?;
-                }
+            let results: Vec<Result<()>> = if level.len() == 1 {
+                level
+                    .iter()
+                    .filter_map(|pkg_name| {
+                        let release = release_set.get(pkg_name.as_str())?;
+                        let pkg = packages.iter().find(|p| p.name == *pkg_name)?;
+                        Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm, dist_tag))
+                    })
+                    .collect()
             } else {
-                let results: Vec<Result<()>> = level
+                level
                     .par_iter()
                     .filter_map(|pkg_name| {
                         let release = release_set.get(pkg_name.as_str())?;
                         let pkg = packages.iter().find(|p| p.name == *pkg_name)?;
-                        Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm))
+                        Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm, dist_tag))
                     })
-                    .collect();
+                    .collect()
+            };
 
-                for r in results {
-                    r?;
+            for r in results {
+                if let Err(e) = r {
+                    eprintln!("  [{}] Error: {}", pm, e);
+                    errors.push(e.to_string());
                 }
             }
         }
 
-        Ok(())
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(
+                "{} package(s) failed to publish:\n  {}",
+                errors.len(),
+                errors.join("\n  ")
+            )
+        }
     }
 }
 
@@ -167,12 +191,13 @@ fn publish_one(
     release: &PackageRelease,
     opts: &NpmOptions,
     pm: PackageManager,
+    dist_tag: Option<&str>,
 ) -> Result<()> {
     let pkg_dir = repo_root.join(&pkg.path);
 
     if dry_run {
         let mut extra = String::new();
-        if let Some(ref tag) = opts.tag {
+        if let Some(tag) = dist_tag {
             extra.push_str(&format!(" --tag {}", tag));
         }
         if !opts.publish_args.is_empty() {
@@ -194,7 +219,7 @@ fn publish_one(
         &pkg_dir,
         &opts.access,
         opts.registry.as_deref(),
-        opts.tag.as_deref(),
+        dist_tag,
         &opts.publish_args,
     );
 
@@ -204,6 +229,15 @@ fn publish_one(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if is_already_published(&stderr) {
+            println!(
+                "  [{}] {} v{} already published, skipping",
+                pm, pkg.name, release.next_version
+            );
+            return Ok(());
+        }
+
         anyhow::bail!("{} publish failed for {}: {}", pm, pkg.name, stderr);
     }
 
@@ -212,6 +246,22 @@ fn publish_one(
         pm, pkg.name, release.next_version
     );
     Ok(())
+}
+
+/// Detect "version already exists" errors from npm/yarn/pnpm.
+fn is_already_published(stderr: &str) -> bool {
+    // npm: "You cannot publish over the previously published versions"
+    // npm: "EPUBLISHCONFLICT"
+    // pnpm: "previously published versions"
+    // yarn: "already been published"
+    let patterns = [
+        "previously published version",
+        "EPUBLISHCONFLICT",
+        "already been published",
+        "cannot publish over",
+        "Version already exists",
+    ];
+    patterns.iter().any(|p| stderr.contains(p))
 }
 
 /// Group packages into dependency levels for parallel publishing.
@@ -346,6 +396,24 @@ mod tests {
         assert!(levels[1].contains(&"b".to_string()));
         assert!(levels[1].contains(&"c".to_string()));
         assert_eq!(levels[2], vec!["d"]);
+    }
+
+    #[test]
+    fn test_already_published_detection() {
+        assert!(is_already_published(
+            "npm ERR! 403 You cannot publish over the previously published versions: 1.0.0"
+        ));
+        assert!(is_already_published("npm error code EPUBLISHCONFLICT"));
+        assert!(is_already_published(
+            "This package has already been published"
+        ));
+        assert!(is_already_published("Version already exists"));
+        assert!(is_already_published(
+            "cannot publish over the previously published version"
+        ));
+        assert!(!is_already_published("npm ERR! 403 Forbidden"));
+        assert!(!is_already_published("ENOMEM out of memory"));
+        assert!(!is_already_published("network timeout"));
     }
 
     fn make_pkg(name: &str, deps: &[&str]) -> Package {
