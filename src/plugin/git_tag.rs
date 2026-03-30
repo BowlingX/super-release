@@ -19,10 +19,8 @@ impl Plugin for GitTagPlugin {
         _packages: &[Package],
         releases: &[PackageRelease],
     ) -> Result<()> {
-        let repo = git::open_repo(ctx.repo_root)?;
-
         for release in releases {
-            let tag_name = ctx.config.format_tag(&release.package_name, &release.next_version);
+            let tag_name = ctx.config.format_tag(&release.package_name, &release.next_version, release.is_root);
             let message = format!(
                 "Release {} v{}",
                 release.package_name, release.next_version
@@ -33,7 +31,7 @@ impl Plugin for GitTagPlugin {
                 continue;
             }
 
-            git::create_tag(&repo, &tag_name, &message)?;
+            git::create_tag(ctx.repo, &tag_name, &message)?;
             println!("  [git-tag] Created tag: {}", tag_name);
         }
 

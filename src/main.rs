@@ -8,6 +8,7 @@ mod version;
 use anyhow::{Context, Result};
 use clap::Parser;
 use console::style;
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -37,12 +38,24 @@ struct Cli {
     /// Verbose output
     #[arg(long, short = 'v')]
     verbose: bool,
+
+    /// Number of parallel jobs for commit analysis (default: number of CPUs)
+    #[arg(long, short = 'j')]
+    jobs: Option<usize>,
+}
+
+/// Print and immediately flush to ensure output is visible.
+macro_rules! printfl {
+    ($($arg:tt)*) => {{
+        println!($($arg)*);
+        let _ = io::stdout().flush();
+    }};
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let repo_root = config::find_repo_root(&cli.path)
+    let (repo_root, repo) = config::find_repo_root(&cli.path)
         .context("Could not find a git repository")?;
 
     let cfg = if let Some(config_path) = &cli.config {
@@ -52,56 +65,91 @@ fn main() -> Result<()> {
     };
 
     if cli.dry_run {
-        println!(
+        printfl!(
             "{} {}",
             style("super-release").bold().cyan(),
             style("(dry run)").dim()
         );
     } else {
-        println!("{}", style("super-release").bold().cyan());
+        printfl!("{}", style("super-release").bold().cyan());
     }
-    println!();
+    printfl!();
 
-    // 1. Discover packages
     let mut packages = package::discover_packages(&repo_root)?;
     package::resolve_local_dependencies(&mut packages);
 
-    // Filter packages if specified
     if !cli.package.is_empty() {
         packages.retain(|p| cli.package.iter().any(|f| p.name.contains(f)));
     }
 
-    // Apply exclude patterns from config
     if !cfg.exclude.is_empty() {
         packages.retain(|p| !cfg.exclude.iter().any(|e| p.name.contains(e)));
     }
 
     if packages.is_empty() {
-        println!("{}", style("No packages found.").yellow());
+        printfl!("{}", style("No packages found.").yellow());
         return Ok(());
     }
 
-    println!(
+    printfl!(
         "{} Discovered {} package(s):",
         style(">>").bold().blue(),
         packages.len()
     );
     for pkg in &packages {
-        println!(
+        printfl!(
             "   {} {} ({})",
             style("*").dim(),
             style(&pkg.name).bold(),
             style(pkg.path.display()).dim()
         );
     }
-    println!();
+    printfl!();
 
-    // 2. Open repo and determine releases
-    let repo = git::open_repo(&repo_root)?;
-    let releases = version::determine_releases(&repo, &packages)?;
+    let branch_ctx = config::resolve_branch_context(&repo, &cfg)?;
+
+    if cli.verbose || cli.dry_run {
+        let channel_info = if let Some(ref pre) = branch_ctx.prerelease {
+            format!(" (prerelease: {})", pre)
+        } else if branch_ctx.maintenance {
+            " (maintenance)".to_string()
+        } else {
+            String::new()
+        };
+        printfl!(
+            "{} Branch: {}{}",
+            style(">>").bold().blue(),
+            style(&branch_ctx.branch_name).bold(),
+            style(channel_info).dim()
+        );
+        printfl!();
+    }
+
+    let jobs = cli.jobs.unwrap_or_else(|| {
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        (cpus / 2).max(1)
+    });
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(jobs)
+        .build_global()
+        .ok();
+
+    let num_threads = rayon::current_num_threads();
+    printfl!(
+        "{} Using {} thread{}",
+        style(">>").bold().blue(),
+        style(num_threads).bold(),
+        if num_threads == 1 { "" } else { "s" }
+    );
+    printfl!();
+
+    let releases =
+        version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
 
     if releases.is_empty() {
-        println!(
+        printfl!(
             "{} {}",
             style(">>").bold().blue(),
             style("No releases needed. All packages are up to date.").green()
@@ -109,8 +157,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // 3. Print release plan
-    println!(
+    printfl!(
         "{} Release plan ({} package(s) to release):\n",
         style(">>").bold().blue(),
         releases.len()
@@ -124,7 +171,7 @@ fn main() -> Result<()> {
             commit::BumpLevel::None => console::Color::White,
         };
 
-        println!(
+        printfl!(
             "   {} {} {} -> {} ({})",
             style("*").dim(),
             style(&release.package_name).bold(),
@@ -134,26 +181,34 @@ fn main() -> Result<()> {
         );
 
         if cli.verbose || cli.dry_run {
-            for commit in &release.commits {
+            const MAX_COMMITS_SHOWN: usize = 10;
+            for commit in release.commits.iter().take(MAX_COMMITS_SHOWN) {
                 let type_str = if commit.breaking {
                     format!("{}!", commit.commit_type)
                 } else {
                     commit.commit_type.clone()
                 };
-                println!(
+                printfl!(
                     "     {} {} {}",
                     style(&commit.hash).dim(),
                     style(format!("({})", type_str)).dim(),
                     commit.description
                 );
             }
+            if release.commits.len() > MAX_COMMITS_SHOWN {
+                printfl!(
+                    "     {} (+{} more commits)",
+                    style("...").dim(),
+                    release.commits.len() - MAX_COMMITS_SHOWN
+                );
+            }
         }
     }
-    println!();
+    printfl!();
 
-    // 4. Execute plugins
     let plugin_ctx = plugin::PluginContext {
         repo_root: &repo_root,
+        repo: &repo,
         dry_run: cli.dry_run,
         config: &cfg,
     };
@@ -171,7 +226,7 @@ fn main() -> Result<()> {
             }
         };
 
-        println!(
+        printfl!(
             "{} Running plugin: {}",
             style(">>").bold().blue(),
             style(p.name()).bold()
@@ -181,19 +236,18 @@ fn main() -> Result<()> {
         p.prepare(&plugin_ctx, plugin_cfg, &packages, &releases)?;
         p.publish(&plugin_ctx, plugin_cfg, &packages, &releases)?;
 
-        println!();
+        printfl!();
     }
 
     if cli.dry_run {
-        println!(
+        printfl!(
             "{}",
-            style("Dry run complete. No changes were made.").green().bold()
+            style("Dry run complete. No changes were made.")
+                .green()
+                .bold()
         );
     } else {
-        println!(
-            "{}",
-            style("Release complete!").green().bold()
-        );
+        printfl!("{}", style("Release complete!").green().bold());
     }
 
     Ok(())

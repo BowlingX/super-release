@@ -11,6 +11,7 @@ use crate::version::PackageRelease;
 /// Context passed to plugins during execution.
 pub struct PluginContext<'a> {
     pub repo_root: &'a std::path::Path,
+    pub repo: &'a git2::Repository,
     pub dry_run: bool,
     pub config: &'a crate::config::Config,
 }

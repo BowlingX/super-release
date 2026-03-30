@@ -15,6 +15,8 @@ pub struct Package {
     pub path: PathBuf,
     /// Path to the package.json file (relative to repo root)
     pub manifest_path: PathBuf,
+    /// Whether this is the root package (package.json at repo root)
+    pub is_root: bool,
     /// Dependencies on other packages in this repo (name -> version requirement)
     pub local_dependencies: HashMap<String, String>,
     /// All dependencies (for reference)
@@ -93,18 +95,15 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
 
     let dependencies = pkg_json.dependencies.unwrap_or_default();
     let dev_dependencies = pkg_json.dev_dependencies.unwrap_or_default();
-    let peer_dependencies = pkg_json.peer_dependencies.unwrap_or_default();
 
-    // Merge all dependency maps for local dep detection later
-    let mut all_deps = dependencies.clone();
-    all_deps.extend(dev_dependencies.clone());
-    all_deps.extend(peer_dependencies);
+    let is_root = rel_dir.as_os_str().is_empty();
 
     Ok(Some(Package {
         name,
         version,
         path: rel_dir,
         manifest_path: rel_manifest,
+        is_root,
         local_dependencies: HashMap::new(), // Resolved later
         dependencies,
         dev_dependencies,
@@ -112,7 +111,7 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
 }
 
 /// Resolve local (in-repo) dependencies between packages.
-pub fn resolve_local_dependencies(packages: &mut Vec<Package>) {
+pub fn resolve_local_dependencies(packages: &mut [Package]) {
     let names: Vec<String> = packages.iter().map(|p| p.name.clone()).collect();
     for pkg in packages.iter_mut() {
         let mut local = HashMap::new();
@@ -198,6 +197,7 @@ mod tests {
                 version: Version::new(1, 0, 0),
                 path: PathBuf::from(""),
                 manifest_path: PathBuf::from("package.json"),
+                is_root: true,
                 local_dependencies: HashMap::new(),
                 dependencies: HashMap::new(),
                 dev_dependencies: HashMap::new(),
@@ -207,6 +207,7 @@ mod tests {
                 version: Version::new(1, 0, 0),
                 path: PathBuf::from("packages/core"),
                 manifest_path: PathBuf::from("packages/core/package.json"),
+                is_root: false,
                 local_dependencies: HashMap::new(),
                 dependencies: HashMap::new(),
                 dev_dependencies: HashMap::new(),
@@ -216,6 +217,7 @@ mod tests {
                 version: Version::new(1, 0, 0),
                 path: PathBuf::from("packages/utils"),
                 manifest_path: PathBuf::from("packages/utils/package.json"),
+                is_root: false,
                 local_dependencies: HashMap::new(),
                 dependencies: HashMap::new(),
                 dev_dependencies: HashMap::new(),
@@ -245,6 +247,7 @@ mod tests {
                 version: Version::new(1, 0, 0),
                 path: PathBuf::from("packages/a"),
                 manifest_path: PathBuf::from("packages/a/package.json"),
+                is_root: false,
                 local_dependencies: HashMap::new(),
                 dependencies: HashMap::new(),
                 dev_dependencies: HashMap::new(),
@@ -254,6 +257,7 @@ mod tests {
                 version: Version::new(1, 0, 0),
                 path: PathBuf::from("packages/b"),
                 manifest_path: PathBuf::from("packages/b/package.json"),
+                is_root: false,
                 local_dependencies: [("a".into(), "^1.0.0".into())].into_iter().collect(),
                 dependencies: HashMap::new(),
                 dev_dependencies: HashMap::new(),
@@ -263,6 +267,7 @@ mod tests {
                 version: Version::new(1, 0, 0),
                 path: PathBuf::from("packages/c"),
                 manifest_path: PathBuf::from("packages/c/package.json"),
+                is_root: false,
                 local_dependencies: [("b".into(), "^1.0.0".into())].into_iter().collect(),
                 dependencies: HashMap::new(),
                 dev_dependencies: HashMap::new(),
@@ -285,6 +290,7 @@ mod tests {
                 version: Version::new(1, 0, 0),
                 path: PathBuf::from("packages/core"),
                 manifest_path: PathBuf::from("packages/core/package.json"),
+                is_root: false,
                 local_dependencies: HashMap::new(),
                 dependencies: HashMap::new(),
                 dev_dependencies: HashMap::new(),
@@ -294,6 +300,7 @@ mod tests {
                 version: Version::new(1, 0, 0),
                 path: PathBuf::from("packages/app"),
                 manifest_path: PathBuf::from("packages/app/package.json"),
+                is_root: false,
                 local_dependencies: HashMap::new(),
                 dependencies: [("core".into(), "^1.0.0".into()), ("lodash".into(), "^4.0.0".into())].into_iter().collect(),
                 dev_dependencies: HashMap::new(),

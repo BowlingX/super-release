@@ -1,5 +1,11 @@
 use regex::Regex;
 use std::fmt;
+use std::sync::LazyLock;
+
+static CONVENTIONAL_COMMIT_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?P<type>[a-zA-Z]+)(?:\((?P<scope>[^)]+)\))?(?P<bang>!)?:\s*(?P<desc>.+)")
+        .unwrap()
+});
 
 /// The type of version bump a commit implies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -23,6 +29,7 @@ impl fmt::Display for BumpLevel {
 
 /// A parsed conventional commit.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ConventionalCommit {
     pub hash: String,
     pub commit_type: String,
@@ -31,6 +38,8 @@ pub struct ConventionalCommit {
     pub body: Option<String>,
     pub breaking: bool,
     pub bump: BumpLevel,
+    /// The full original commit message (needed by git-cliff).
+    pub raw_message: String,
     /// Files changed by this commit (relative paths).
     pub files_changed: Vec<String>,
 }
@@ -40,26 +49,19 @@ pub struct ConventionalCommit {
 ///
 /// The `hash` and `files_changed` are set by the caller after parsing.
 pub fn parse_conventional_commit(hash: &str, message: &str) -> Option<ConventionalCommit> {
-    let re = Regex::new(
-        r"^(?P<type>[a-zA-Z]+)(?:\((?P<scope>[^)]+)\))?(?P<bang>!)?:\s*(?P<desc>.+)"
-    ).unwrap();
-
     let first_line = message.lines().next()?;
-    let caps = re.captures(first_line)?;
+    let caps = CONVENTIONAL_COMMIT_RE.captures(first_line)?;
 
     let commit_type = caps.name("type")?.as_str().to_lowercase();
     let scope = caps.name("scope").map(|m| m.as_str().to_string());
     let description = caps.name("desc")?.as_str().trim().to_string();
     let bang = caps.name("bang").is_some();
 
-    // Extract body (everything after first blank line)
     let body = message
-        .splitn(2, "\n\n")
-        .nth(1)
-        .map(|b| b.trim().to_string())
+        .split_once("\n\n")
+        .map(|(_, b)| b.trim().to_string())
         .filter(|b| !b.is_empty());
 
-    // Check for BREAKING CHANGE in footer or bang notation
     let breaking = bang
         || message.contains("BREAKING CHANGE:")
         || message.contains("BREAKING-CHANGE:");
@@ -83,6 +85,7 @@ pub fn parse_conventional_commit(hash: &str, message: &str) -> Option<Convention
         body,
         breaking,
         bump,
+        raw_message: message.to_string(),
         files_changed: Vec::new(),
     })
 }

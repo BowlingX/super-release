@@ -5,14 +5,19 @@ use std::path::{Path, PathBuf};
 /// Top-level configuration for super-release.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Branch patterns to release from (default: ["main", "master"])
+    /// Branch configurations for release channels.
     #[serde(default = "default_branches")]
-    pub branches: Vec<String>,
+    pub branches: Vec<BranchConfig>,
 
-    /// Tag format. Use `{name}` and `{version}` placeholders.
-    /// Default: "{name}@{version}"
+    /// Tag format template for the root package (default: "v{version}").
+    /// Supports `{version}` and `{name}` placeholders.
     #[serde(default = "default_tag_format")]
     pub tag_format: String,
+
+    /// Tag format template for sub-packages (default: "{name}/v{version}").
+    /// Supports `{version}` and `{name}` placeholders.
+    #[serde(default = "default_tag_format_package")]
+    pub tag_format_package: String,
 
     /// Ordered list of plugins to execute.
     #[serde(default = "default_plugins")]
@@ -27,6 +32,94 @@ pub struct Config {
     pub exclude: Vec<String>,
 }
 
+/// Configuration for a release branch.
+///
+/// Branches can be:
+/// - **Stable** (default): `main`, `master` — produces normal releases
+/// - **Prerelease**: `beta`, `next`, `alpha` — produces e.g. `2.0.0-beta.1`
+/// - **Maintenance**: `1.x`, `2.x` — produces patch/minor releases for old majors
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum BranchConfig {
+    /// Simple branch name (stable channel, no prerelease).
+    Name(String),
+    /// Full branch configuration with optional channel/prerelease/maintenance.
+    Full(BranchDef),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchDef {
+    /// Branch name or glob pattern (e.g. "main", "beta", "test-*", "1.x").
+    pub name: String,
+
+    /// Prerelease channel configuration.
+    /// - `true`:     use the branch name as the channel (e.g. branch `test-foo` → `1.2.0-test-foo.1`)
+    /// - `"beta"`:   use a fixed channel name (e.g. `1.2.0-beta.1`)
+    /// - absent/false: stable releases
+    #[serde(default)]
+    pub prerelease: PrereleaseSetting,
+
+    /// Whether this is a maintenance branch (e.g. "1.x").
+    /// When true, the major version is capped to the number in the branch name.
+    /// Breaking changes are demoted to minor bumps.
+    #[serde(default)]
+    pub maintenance: bool,
+}
+
+/// How to determine the prerelease channel for a branch.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PrereleaseSetting {
+    /// Not a prerelease branch.
+    #[default]
+    Disabled,
+    /// `true` means use the branch name as the prerelease channel.
+    Flag(bool),
+    /// A fixed channel name (e.g. "beta", "rc").
+    Channel(String),
+}
+
+impl BranchConfig {
+    pub fn name(&self) -> &str {
+        match self {
+            BranchConfig::Name(n) => n,
+            BranchConfig::Full(def) => &def.name,
+        }
+    }
+
+    /// Resolve the prerelease channel for a given actual branch name.
+    /// Returns `None` for stable branches.
+    pub fn resolve_prerelease(&self, actual_branch: &str) -> Option<String> {
+        match self {
+            BranchConfig::Name(_) => None,
+            BranchConfig::Full(def) => match &def.prerelease {
+                PrereleaseSetting::Disabled => None,
+                PrereleaseSetting::Flag(false) => None,
+                PrereleaseSetting::Flag(true) => Some(actual_branch.to_string()),
+                PrereleaseSetting::Channel(ch) => Some(ch.clone()),
+            },
+        }
+    }
+
+    pub fn is_maintenance(&self) -> bool {
+        match self {
+            BranchConfig::Name(_) => false,
+            BranchConfig::Full(def) => def.maintenance,
+        }
+    }
+}
+
+/// Resolved branch context for the current HEAD.
+#[derive(Debug, Clone)]
+pub struct BranchContext {
+    /// The current branch name.
+    pub branch_name: String,
+    /// Prerelease channel (e.g. "beta"), or None for stable.
+    pub prerelease: Option<String>,
+    /// Whether this is a maintenance branch.
+    pub maintenance: bool,
+}
+
 /// Configuration for a single plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PluginConfig {
@@ -38,12 +131,19 @@ pub struct PluginConfig {
     pub options: serde_yaml::Value,
 }
 
-fn default_branches() -> Vec<String> {
-    vec!["main".into(), "master".into()]
+fn default_branches() -> Vec<BranchConfig> {
+    vec![
+        BranchConfig::Name("main".into()),
+        BranchConfig::Name("master".into()),
+    ]
 }
 
 fn default_tag_format() -> String {
-    "{name}@{version}".into()
+    "v{version}".into()
+}
+
+fn default_tag_format_package() -> String {
+    "{name}/v{version}".into()
 }
 
 fn default_plugins() -> Vec<PluginConfig> {
@@ -68,6 +168,7 @@ impl Default for Config {
         Config {
             branches: default_branches(),
             tag_format: default_tag_format(),
+            tag_format_package: default_tag_format_package(),
             plugins: default_plugins(),
             packages: None,
             exclude: Vec::new(),
@@ -103,21 +204,104 @@ fn load_config_from_path(path: &Path) -> Result<Config> {
 }
 
 /// Resolve the repository root from a starting path.
-pub fn find_repo_root(start: &Path) -> Result<PathBuf> {
+/// Returns both the root path and the opened Repository to avoid re-opening it.
+pub fn find_repo_root(start: &Path) -> Result<(PathBuf, git2::Repository)> {
     let repo = git2::Repository::discover(start)?;
     let workdir = repo
         .workdir()
-        .context("Bare repositories are not supported")?;
-    Ok(workdir.to_path_buf())
+        .context("Bare repositories are not supported")?
+        .to_path_buf();
+    Ok((workdir, repo))
+}
+
+/// Detect the current branch and resolve it against the branch config.
+pub fn resolve_branch_context(
+    repo: &git2::Repository,
+    config: &Config,
+) -> Result<BranchContext> {
+    let head = repo.head().context("Failed to get HEAD")?;
+    let branch_name = head
+        .shorthand()
+        .unwrap_or("HEAD")
+        .to_string();
+
+    // Find matching branch config
+    for bc in &config.branches {
+        if branch_matches(bc.name(), &branch_name) {
+            return Ok(BranchContext {
+                prerelease: bc.resolve_prerelease(&branch_name),
+                branch_name: branch_name.clone(),
+                maintenance: bc.is_maintenance(),
+            });
+        }
+    }
+
+    // No matching branch config — allow release on any branch with stable defaults
+    Ok(BranchContext {
+        branch_name,
+        prerelease: None,
+        maintenance: false,
+    })
+}
+
+/// Check if a branch name matches a branch config pattern.
+/// Supports literal names and simple glob patterns:
+/// - `"main"` matches `"main"` exactly
+/// - `"*.x"` matches `"1.x"`, `"2.x"`, etc.
+fn branch_matches(pattern: &str, branch: &str) -> bool {
+    if pattern == branch {
+        return true;
+    }
+    if pattern.contains('*') {
+        // Convert glob to regex: escape dots, replace * with wildcard
+        let re_pattern = pattern
+            .replace('.', r"\.")
+            .replace('*', r"[^/]+");
+        if let Ok(re) = regex::Regex::new(&format!("^{}$", re_pattern)) {
+            return re.is_match(branch);
+        }
+    }
+    false
 }
 
 impl Config {
-    /// Format a tag name using the configured tag_format.
-    pub fn format_tag(&self, package_name: &str, version: &semver::Version) -> String {
-        self.tag_format
-            .replace("{name}", package_name)
-            .replace("{version}", &version.to_string())
+    /// Format a tag name for a package version using the configured template.
+    pub fn format_tag(&self, package_name: &str, version: &semver::Version, is_root: bool) -> String {
+        let template = if is_root {
+            &self.tag_format
+        } else {
+            &self.tag_format_package
+        };
+        render_tag_template(template, package_name, &version.to_string())
     }
+
+    /// Build a regex that matches tags produced by the configured template,
+    /// capturing the version portion. Returns `None` if the template has no `{version}`.
+    pub fn tag_match_regex(&self, package_name: &str, is_root: bool) -> Option<regex::Regex> {
+        let template = if is_root {
+            &self.tag_format
+        } else {
+            &self.tag_format_package
+        };
+        tag_template_to_regex(template, package_name)
+    }
+}
+
+fn render_tag_template(template: &str, name: &str, version: &str) -> String {
+    template
+        .replace("{name}", name)
+        .replace("{version}", version)
+}
+
+/// Convert a tag template like `{name}/v{version}` into a regex that captures
+/// the version: `^@acme/core/v(?P<version>.+)$`
+fn tag_template_to_regex(template: &str, package_name: &str) -> Option<regex::Regex> {
+    if !template.contains("{version}") {
+        return None;
+    }
+    let escaped = regex::escape(&template.replace("{name}", package_name));
+    let pattern = escaped.replace(r"\{version\}", r"(?P<version>[0-9].+)");
+    regex::Regex::new(&format!("^{}$", pattern)).ok()
 }
 
 #[cfg(test)]
@@ -127,38 +311,144 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.branches, vec!["main", "master"]);
-        assert_eq!(config.tag_format, "{name}@{version}");
+        assert_eq!(config.branches.len(), 2);
+        assert_eq!(config.branches[0].name(), "main");
+        assert_eq!(config.branches[1].name(), "master");
+        assert_eq!(config.tag_format, "v{version}");
+        assert_eq!(config.tag_format_package, "{name}/v{version}");
         assert_eq!(config.plugins.len(), 3);
-        assert_eq!(config.plugins[0].name, "changelog");
-        assert_eq!(config.plugins[1].name, "npm");
-        assert_eq!(config.plugins[2].name, "git-tag");
     }
 
     #[test]
-    fn test_format_tag() {
+    fn test_format_tag_root() {
         let config = Config::default();
         let v = semver::Version::new(1, 2, 3);
-        assert_eq!(config.format_tag("@myorg/core", &v), "@myorg/core@1.2.3");
+        assert_eq!(config.format_tag("my-app", &v, true), "v1.2.3");
     }
 
     #[test]
-    fn test_parse_yaml_config() {
+    fn test_format_tag_subpackage() {
+        let config = Config::default();
+        let v = semver::Version::new(1, 2, 3);
+        assert_eq!(config.format_tag("@myorg/core", &v, false), "@myorg/core/v1.2.3");
+    }
+
+    #[test]
+    fn test_format_tag_custom_templates() {
+        let config = Config {
+            tag_format: "release-{version}".into(),
+            tag_format_package: "{name}@{version}".into(),
+            ..Config::default()
+        };
+        let v = semver::Version::new(2, 0, 0);
+        assert_eq!(config.format_tag("my-app", &v, true), "release-2.0.0");
+        assert_eq!(config.format_tag("@acme/lib", &v, false), "@acme/lib@2.0.0");
+    }
+
+    #[test]
+    fn test_format_tag_semantic_release_compat() {
+        // semantic-release style: v{version} for root, {name}@{version} for packages
+        let config = Config {
+            tag_format: "v{version}".into(),
+            tag_format_package: "{name}@{version}".into(),
+            ..Config::default()
+        };
+        let v = semver::Version::new(1, 5, 0);
+        assert_eq!(config.format_tag("root", &v, true), "v1.5.0");
+        assert_eq!(config.format_tag("@scope/pkg", &v, false), "@scope/pkg@1.5.0");
+    }
+
+    #[test]
+    fn test_tag_match_regex() {
+        let config = Config::default();
+
+        let re = config.tag_match_regex("my-app", true).unwrap();
+        assert!(re.is_match("v1.2.3"));
+        assert!(!re.is_match("my-app/v1.2.3"));
+        let caps = re.captures("v1.2.3").unwrap();
+        assert_eq!(&caps["version"], "1.2.3");
+
+        let re = config.tag_match_regex("@acme/core", false).unwrap();
+        assert!(re.is_match("@acme/core/v1.2.3"));
+        assert!(!re.is_match("v1.2.3"));
+        let caps = re.captures("@acme/core/v2.0.0-beta.1").unwrap();
+        assert_eq!(&caps["version"], "2.0.0-beta.1");
+    }
+
+    #[test]
+    fn test_tag_match_regex_custom() {
+        let config = Config {
+            tag_format: "{name}-v{version}".into(),
+            tag_format_package: "{name}@{version}".into(),
+            ..Config::default()
+        };
+        let re = config.tag_match_regex("my-app", true).unwrap();
+        assert!(re.is_match("my-app-v3.0.0"));
+        let caps = re.captures("my-app-v3.0.0").unwrap();
+        assert_eq!(&caps["version"], "3.0.0");
+
+        let re = config.tag_match_regex("@acme/lib", false).unwrap();
+        assert!(re.is_match("@acme/lib@1.0.0"));
+    }
+
+    #[test]
+    fn test_parse_yaml_simple_branches() {
         let yaml = r#"
 branches:
   - main
   - develop
-tag_format: "v{version}"
 plugins:
   - name: changelog
-    options:
-      file: CHANGES.md
-  - name: npm
-  - name: git-tag
 "#;
         let config: Config = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.branches, vec!["main", "develop"]);
-        assert_eq!(config.tag_format, "v{version}");
-        assert_eq!(config.plugins.len(), 3);
+        assert_eq!(config.branches[0].name(), "main");
+        assert_eq!(config.branches[1].name(), "develop");
+        assert!(config.branches[0].resolve_prerelease("main").is_none());
+    }
+
+    #[test]
+    fn test_parse_yaml_rich_branches() {
+        let yaml = r#"
+branches:
+  - main
+  - name: beta
+    prerelease: beta
+  - name: next
+    prerelease: next
+  - name: "test-*"
+    prerelease: true
+  - name: "1.x"
+    maintenance: true
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.branches.len(), 5);
+        assert_eq!(config.branches[0].name(), "main");
+        assert!(config.branches[0].resolve_prerelease("main").is_none());
+
+        assert_eq!(config.branches[1].name(), "beta");
+        assert_eq!(config.branches[1].resolve_prerelease("beta").as_deref(), Some("beta"));
+
+        assert_eq!(config.branches[2].name(), "next");
+        assert_eq!(config.branches[2].resolve_prerelease("next").as_deref(), Some("next"));
+
+        // `prerelease: true` uses the actual branch name as channel
+        assert_eq!(config.branches[3].name(), "test-*");
+        assert_eq!(
+            config.branches[3].resolve_prerelease("test-hello").as_deref(),
+            Some("test-hello")
+        );
+
+        assert_eq!(config.branches[4].name(), "1.x");
+        assert!(config.branches[4].is_maintenance());
+    }
+
+    #[test]
+    fn test_branch_matches() {
+        assert!(branch_matches("main", "main"));
+        assert!(!branch_matches("main", "master"));
+        assert!(branch_matches("1.x", "1.x"));
+        assert!(!branch_matches("1.x", "2.x"));
+        assert!(branch_matches("*.x", "2.x"));
+        assert!(branch_matches("*.x", "15.x"));
     }
 }

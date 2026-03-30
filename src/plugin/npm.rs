@@ -139,15 +139,12 @@ fn update_package_json(
     let mut pkg: serde_json::Value = serde_json::from_str(&content)
         .with_context(|| format!("parsing {}", path.display()))?;
 
-    // Update version
     pkg["version"] = serde_json::Value::String(new_version.to_string());
 
-    // Update local dependencies in all dependency fields
     for dep_field in &["dependencies", "devDependencies", "peerDependencies"] {
         if let Some(deps) = pkg.get_mut(*dep_field).and_then(|d| d.as_object_mut()) {
             for (dep_name, dep_ver) in deps.iter_mut() {
                 if let Some(new_ver) = version_map.get(dep_name.as_str()) {
-                    // Preserve the version prefix (^, ~, etc.)
                     let current = dep_ver.as_str().unwrap_or("");
                     let prefix = if current.starts_with('^') {
                         "^"
@@ -165,9 +162,7 @@ fn update_package_json(
         }
     }
 
-    // Write back with pretty formatting (2-space indent to match npm conventions)
     let output = serde_json::to_string_pretty(&pkg)?;
-    // Ensure trailing newline
     fs::write(path, format!("{}\n", output))?;
     Ok(())
 }

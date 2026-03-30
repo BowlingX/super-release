@@ -1,13 +1,25 @@
 use anyhow::Result;
-use chrono::Local;
-use std::collections::BTreeMap;
+use console::style;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
+
+use git_cliff_core::changelog::Changelog;
+use git_cliff_core::commit::Commit as CliffCommit;
+use git_cliff_core::config::Config as CliffConfig;
+use git_cliff_core::release::Release as CliffRelease;
 
 use super::{Plugin, PluginConfig, PluginContext};
 use crate::commit::ConventionalCommit;
 use crate::package::Package;
 use crate::version::PackageRelease;
+
+static CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
+    "".parse().expect("Failed to load git-cliff default config")
+});
+
+/// Max lines to show in dry-run changelog preview.
+const DRY_RUN_MAX_LINES: usize = 20;
 
 pub struct ChangelogPlugin;
 
@@ -20,93 +32,79 @@ impl Plugin for ChangelogPlugin {
         &self,
         ctx: &PluginContext,
         _config: &PluginConfig,
-        _packages: &[Package],
+        packages: &[Package],
         releases: &[PackageRelease],
     ) -> Result<()> {
         for release in releases {
-            let pkg_dir = _packages
+            let pkg_dir = packages
                 .iter()
                 .find(|p| p.name == release.package_name)
                 .map(|p| ctx.repo_root.join(&p.path))
                 .unwrap_or_else(|| ctx.repo_root.to_path_buf());
 
             let changelog_path = pkg_dir.join("CHANGELOG.md");
+            let notes = generate_release_notes(release)?;
 
             if ctx.dry_run {
-                let notes = generate_release_notes(release);
-                println!(
-                    "  [changelog] Would update {} with:\n{}",
-                    changelog_path.display(),
-                    textwrap(&notes, "    ")
-                );
+                let total_lines = notes.lines().count();
+                let preview: String = notes
+                    .lines()
+                    .take(DRY_RUN_MAX_LINES)
+                    .map(|l| format!("    {}", style(l).dim()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                println!("  [changelog] Would update {}", changelog_path.display());
+                println!("{}", preview);
+                if total_lines > DRY_RUN_MAX_LINES {
+                    println!(
+                        "    {} (+{} more lines)",
+                        style("...").dim(),
+                        total_lines - DRY_RUN_MAX_LINES
+                    );
+                }
                 continue;
             }
 
-            let notes = generate_release_notes(release);
             update_changelog(&changelog_path, &notes)?;
-            println!(
-                "  [changelog] Updated {}",
-                changelog_path.display()
-            );
+            println!("  [changelog] Updated {}", changelog_path.display());
         }
         Ok(())
     }
 }
 
-/// Generate markdown release notes for a package release.
-pub fn generate_release_notes(release: &PackageRelease) -> String {
-    let date = Local::now().format("%Y-%m-%d");
-    let mut out = format!("## {} ({})\n\n", release.next_version, date);
-
-    // Group commits by type
-    let mut grouped: BTreeMap<&str, Vec<&ConventionalCommit>> = BTreeMap::new();
-    for commit in &release.commits {
-        let category = match commit.commit_type.as_str() {
-            "feat" => "Features",
-            "fix" => "Bug Fixes",
-            "perf" => "Performance Improvements",
-            "revert" => "Reverts",
-            "docs" => "Documentation",
-            "refactor" => "Code Refactoring",
-            "test" => "Tests",
-            "build" | "ci" => "Build System",
-            _ => "Other Changes",
-        };
-        grouped.entry(category).or_default().push(commit);
-    }
-
-    // Breaking changes section
-    let breaking: Vec<&ConventionalCommit> = release.commits.iter().filter(|c| c.breaking).collect();
-    if !breaking.is_empty() {
-        out.push_str("### BREAKING CHANGES\n\n");
-        for commit in &breaking {
-            out.push_str(&format!("- **{}**: {} ({})\n", commit_scope(commit), commit.description, commit.hash));
-        }
-        out.push('\n');
-    }
-
-    // Regular sections
-    for (category, commits) in &grouped {
-        out.push_str(&format!("### {}\n\n", category));
-        for commit in commits {
-            let scope = commit_scope(commit);
-            if scope.is_empty() {
-                out.push_str(&format!("- {} ({})\n", commit.description, commit.hash));
-            } else {
-                out.push_str(&format!("- **{}**: {} ({})\n", scope, commit.description, commit.hash));
-            }
-        }
-        out.push('\n');
-    }
-
-    out
+/// Convert our commits to git-cliff commits.
+pub fn to_cliff_commits(commits: &[ConventionalCommit]) -> Vec<CliffCommit<'_>> {
+    commits
+        .iter()
+        .map(|c| CliffCommit::new(c.hash.clone(), c.raw_message.clone()))
+        .collect()
 }
 
-fn commit_scope(commit: &ConventionalCommit) -> String {
-    commit.scope.clone().unwrap_or_default()
+/// Generate markdown release notes for a package release using git-cliff.
+pub fn generate_release_notes(release: &PackageRelease) -> Result<String> {
+    let cliff_release = CliffRelease {
+        version: Some(release.next_version.to_string()),
+        commits: to_cliff_commits(&release.commits),
+        timestamp: Some(chrono::Local::now().timestamp()),
+        previous: Some(Box::new(CliffRelease {
+            version: Some(release.current_version.to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    let changelog = Changelog::new(vec![cliff_release], CLIFF_CONFIG.clone(), None)
+        .map_err(|e| anyhow::anyhow!("Failed to create changelog: {}", e))?;
+
+    let mut output = Vec::new();
+    changelog
+        .generate(&mut output)
+        .map_err(|e| anyhow::anyhow!("Failed to generate changelog: {}", e))?;
+
+    Ok(String::from_utf8(output)?)
 }
 
-/// Update or create a CHANGELOG.md file, prepending new content.
 fn update_changelog(path: &Path, new_content: &str) -> Result<()> {
     let existing = if path.exists() {
         fs::read_to_string(path)?
@@ -116,7 +114,6 @@ fn update_changelog(path: &Path, new_content: &str) -> Result<()> {
 
     let header = "# Changelog\n\n";
     let body = if existing.starts_with("# Changelog") {
-        // Strip the existing header and prepend new content after it
         let rest = existing.strip_prefix("# Changelog").unwrap_or(&existing);
         let rest = rest.trim_start_matches('\n');
         format!("{}{}{}", header, new_content, rest)
@@ -128,11 +125,4 @@ fn update_changelog(path: &Path, new_content: &str) -> Result<()> {
 
     fs::write(path, body)?;
     Ok(())
-}
-
-fn textwrap(text: &str, indent: &str) -> String {
-    text.lines()
-        .map(|l| format!("{}{}", indent, l))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
