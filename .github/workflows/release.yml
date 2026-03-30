@@ -96,7 +96,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      # Build super-release itself to use for the release
       - name: Build super-release
         run: cargo build --release
 
@@ -104,59 +103,37 @@ jobs:
         with:
           path: artifacts
 
-      # Run super-release on itself!
       - name: Run super-release
         env:
-          GIT_AUTHOR_NAME: github-actions[bot]
-          GIT_AUTHOR_EMAIL: github-actions[bot]@users.noreply.github.com
-          GIT_COMMITTER_NAME: github-actions[bot]
-          GIT_COMMITTER_EMAIL: github-actions[bot]@users.noreply.github.com
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           ./target/release/super-release
 
-      # Create GitHub release with binaries
-      - name: Create GitHub Release
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push release commit and tags
         run: |
-          # Get the tag that was just created
-          TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
           if [ -z "$TAG" ]; then
-            echo "No tag found, skipping GitHub release"
+            echo "No new release, nothing to push"
+            exit 0
+          fi
+          git push origin HEAD --follow-tags
+
+      - name: Create GitHub Release
+        run: |
+          TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
+          if [ -z "$TAG" ]; then
             exit 0
           fi
 
-          # Collect all artifacts
           mkdir -p release-assets
           find artifacts -name '*.tar.gz' -exec cp {} release-assets/ \;
           find artifacts -name '*.sha256' -exec cp {} release-assets/ \;
 
-          # Create release
           gh release create "$TAG" \
             --title "$TAG" \
             --generate-notes \
             release-assets/*
-
-      # Publish npm wrapper
-      - name: Publish npm wrapper
-        if: success()
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          # Sync version from root package.json to npm/package.json
-          VERSION=$(node --input-type=module -e "import {readFileSync} from 'fs'; console.log(JSON.parse(readFileSync('package.json','utf8')).version)")
-          if [ "$VERSION" = "0.1.0" ]; then
-            echo "No version bump, skipping npm publish"
-            exit 0
-          fi
-          cd npm
-          node --input-type=module -e "
-            import {readFileSync, writeFileSync} from 'fs';
-            const pkg = JSON.parse(readFileSync('package.json','utf8'));
-            pkg.version = '${VERSION}';
-            writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-          pnpm publish --access public --no-git-checks || true
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
