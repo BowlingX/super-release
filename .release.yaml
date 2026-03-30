@@ -1,0 +1,19 @@
+# super-release configuration
+# See: super-release --help
+
+branches:
+  - main
+  - master
+
+# Tag format: {name} and {version} are replaced
+tag_format: "{name}@{version}"
+
+# Packages to exclude from releasing
+exclude:
+  - monorepo-root
+
+# Plugins execute in order
+plugins:
+  - name: changelog
+  - name: npm
+  - name: git-tag
