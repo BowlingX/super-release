@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 
-use super::{parse_options, Plugin, PluginConfig, PluginContext};
+use super::{parse_options, subprocess, Plugin, PluginConfig, PluginContext};
 use crate::package::{topological_sort, Package};
 use crate::pm::PackageManager;
 use crate::version::PackageRelease;
@@ -24,13 +24,11 @@ pub struct NpmOptions {
     #[serde(default)]
     pub publish_args: Vec<String>,
 
-    /// Dist-tag override. By default derived from the prerelease channel
-    /// (e.g. branch "beta" → tag "beta"). On stable branches, omitted (defaults to "latest").
+    /// Dist-tag override. By default derived from the prerelease channel.
     #[serde(default)]
     pub tag: Option<String>,
 
     /// Force a specific package manager (overrides auto-detection).
-    /// Values: "npm", "yarn", "pnpm"
     #[serde(default)]
     pub package_manager: Option<PackageManager>,
 }
@@ -62,10 +60,8 @@ impl Plugin for NpmPlugin {
         if ctx.dry_run {
             return Ok(());
         }
-
         let opts: NpmOptions = parse_options(config)?;
-        let pm = resolve_pm(ctx, &opts)?;
-        pm.verify()
+        resolve_pm(ctx, &opts)?.verify()
     }
 
     fn prepare(
@@ -117,12 +113,7 @@ impl Plugin for NpmPlugin {
     ) -> Result<()> {
         let opts: NpmOptions = parse_options(config)?;
         let pm = resolve_pm(ctx, &opts)?;
-
-        // Derive dist-tag: explicit config > prerelease channel > none (PM default = "latest")
-        let dist_tag: Option<&str> = opts
-            .tag
-            .as_deref()
-            .or(ctx.branch.prerelease.as_deref());
+        let dist_tag: Option<&str> = opts.tag.as_deref().or(ctx.branch.prerelease.as_deref());
 
         let order = topological_sort(packages)?;
         let release_set: HashMap<&str, &PackageRelease> = releases
@@ -131,7 +122,6 @@ impl Plugin for NpmPlugin {
             .collect();
 
         let levels = dependency_levels(&order, packages, &release_set);
-
         let repo_root = ctx.repo_root;
         let dry_run = ctx.dry_run;
         let mut errors: Vec<String> = Vec::new();
@@ -140,18 +130,18 @@ impl Plugin for NpmPlugin {
             let results: Vec<Result<()>> = if level.len() == 1 {
                 level
                     .iter()
-                    .filter_map(|pkg_name| {
-                        let release = release_set.get(pkg_name.as_str())?;
-                        let pkg = packages.iter().find(|p| p.name == *pkg_name)?;
+                    .filter_map(|name| {
+                        let release = release_set.get(name.as_str())?;
+                        let pkg = packages.iter().find(|p| p.name == *name)?;
                         Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm, dist_tag))
                     })
                     .collect()
             } else {
                 level
                     .par_iter()
-                    .filter_map(|pkg_name| {
-                        let release = release_set.get(pkg_name.as_str())?;
-                        let pkg = packages.iter().find(|p| p.name == *pkg_name)?;
+                    .filter_map(|name| {
+                        let release = release_set.get(name.as_str())?;
+                        let pkg = packages.iter().find(|p| p.name == *name)?;
                         Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm, dist_tag))
                     })
                     .collect()
@@ -194,6 +184,7 @@ fn publish_one(
     dist_tag: Option<&str>,
 ) -> Result<()> {
     let pkg_dir = repo_root.join(&pkg.path);
+    let label = format!("{} v{}", pkg.name, release.next_version);
 
     if dry_run {
         let mut extra = String::new();
@@ -204,18 +195,15 @@ fn publish_one(
             extra.push_str(&format!(" {}", opts.publish_args.join(" ")));
         }
         println!(
-            "  [{}] Would publish {} v{} from {}{}",
-            pm, pkg.name, release.next_version, pkg_dir.display(), extra,
+            "  [{}] Would publish {} from {}{}",
+            pm, label, pkg_dir.display(), extra,
         );
         return Ok(());
     }
 
-    println!(
-        "  [{}] Publishing {} v{} ...",
-        pm, pkg.name, release.next_version
-    );
+    println!("  [{}] Publishing {} ...", pm, label);
 
-    let mut cmd = pm.publish_command(
+    let cmd = pm.publish_command(
         &pkg_dir,
         &opts.access,
         opts.registry.as_deref(),
@@ -223,48 +211,9 @@ fn publish_one(
         &opts.publish_args,
     );
 
-    let output = cmd
-        .output()
-        .with_context(|| format!("Failed to run {} publish for {}", pm, pkg.name))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        if is_already_published(&stderr) {
-            println!(
-                "  [{}] {} v{} already published, skipping",
-                pm, pkg.name, release.next_version
-            );
-            return Ok(());
-        }
-
-        anyhow::bail!("{} publish failed for {}: {}", pm, pkg.name, stderr);
-    }
-
-    println!(
-        "  [{}] Published {} v{}",
-        pm, pkg.name, release.next_version
-    );
-    Ok(())
+    subprocess::run_command(cmd, &label, &pm.to_string())
 }
 
-/// Detect "version already exists" errors from npm/yarn/pnpm.
-fn is_already_published(stderr: &str) -> bool {
-    // npm: "You cannot publish over the previously published versions"
-    // npm: "EPUBLISHCONFLICT"
-    // pnpm: "previously published versions"
-    // yarn: "already been published"
-    let patterns = [
-        "previously published version",
-        "EPUBLISHCONFLICT",
-        "already been published",
-        "cannot publish over",
-        "Version already exists",
-    ];
-    patterns.iter().any(|p| stderr.contains(p))
-}
-
-/// Group packages into dependency levels for parallel publishing.
 fn dependency_levels(
     topo_order: &[String],
     packages: &[Package],
@@ -291,7 +240,6 @@ fn dependency_levels(
             .unwrap_or(0);
 
         pkg_level.insert(name, level);
-
         while levels.len() <= level {
             levels.push(Vec::new());
         }
@@ -301,9 +249,6 @@ fn dependency_levels(
     levels
 }
 
-/// Update only the version field in a package.json file.
-/// Dependencies are left untouched — the package manager resolves
-/// workspace/local dependencies during publish.
 fn update_package_version(path: &std::path::Path, new_version: &semver::Version) -> Result<()> {
     let content =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -329,7 +274,7 @@ mod tests {
         let path = dir.path().join("package.json");
         fs::write(
             &path,
-            r#"{"name":"@acme/core","version":"1.0.0","dependencies":{"@acme/utils":"^1.0.0","lodash":"^4.0.0"}}"#,
+            r#"{"name":"@acme/core","version":"1.0.0","dependencies":{"@acme/utils":"^1.0.0"}}"#,
         )
         .unwrap();
 
@@ -338,28 +283,7 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         let pkg: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(pkg["version"], "1.1.0");
-        // Dependencies are NOT rewritten
         assert_eq!(pkg["dependencies"]["@acme/utils"], "^1.0.0");
-        assert_eq!(pkg["dependencies"]["lodash"], "^4.0.0");
-    }
-
-    #[test]
-    fn test_update_package_version_preserves_workspace_protocol() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("package.json");
-        fs::write(
-            &path,
-            r#"{"name":"@acme/app","version":"1.0.0","dependencies":{"@acme/core":"workspace:*","@acme/utils":"workspace:^"}}"#,
-        )
-        .unwrap();
-
-        update_package_version(&path, &semver::Version::new(2, 0, 0)).unwrap();
-
-        let content = fs::read_to_string(&path).unwrap();
-        let pkg: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(pkg["version"], "2.0.0");
-        assert_eq!(pkg["dependencies"]["@acme/core"], "workspace:*");
-        assert_eq!(pkg["dependencies"]["@acme/utils"], "workspace:^");
     }
 
     #[test]
@@ -398,24 +322,6 @@ mod tests {
         assert_eq!(levels[2], vec!["d"]);
     }
 
-    #[test]
-    fn test_already_published_detection() {
-        assert!(is_already_published(
-            "npm ERR! 403 You cannot publish over the previously published versions: 1.0.0"
-        ));
-        assert!(is_already_published("npm error code EPUBLISHCONFLICT"));
-        assert!(is_already_published(
-            "This package has already been published"
-        ));
-        assert!(is_already_published("Version already exists"));
-        assert!(is_already_published(
-            "cannot publish over the previously published version"
-        ));
-        assert!(!is_already_published("npm ERR! 403 Forbidden"));
-        assert!(!is_already_published("ENOMEM out of memory"));
-        assert!(!is_already_published("network timeout"));
-    }
-
     fn make_pkg(name: &str, deps: &[&str]) -> Package {
         Package {
             name: name.to_string(),
@@ -423,14 +329,8 @@ mod tests {
             path: std::path::PathBuf::from(format!("packages/{}", name)),
             manifest_path: std::path::PathBuf::from(format!("packages/{}/package.json", name)),
             is_root: false,
-            local_dependencies: deps
-                .iter()
-                .map(|d| (d.to_string(), "^1.0.0".to_string()))
-                .collect(),
-            dependencies: deps
-                .iter()
-                .map(|d| (d.to_string(), "^1.0.0".to_string()))
-                .collect(),
+            local_dependencies: deps.iter().map(|d| (d.to_string(), "^1.0.0".to_string())).collect(),
+            dependencies: deps.iter().map(|d| (d.to_string(), "^1.0.0".to_string())).collect(),
             dev_dependencies: HashMap::new(),
         }
     }

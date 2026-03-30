@@ -1,3 +1,7 @@
+mod branch;
+
+pub use branch::{BranchConfig, BranchContext};
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -5,7 +9,6 @@ use std::path::{Path, PathBuf};
 /// Top-level configuration for super-release.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Branch configurations for release channels.
     #[serde(default = "default_branches")]
     pub branches: Vec<BranchConfig>,
 
@@ -30,94 +33,6 @@ pub struct Config {
     /// Packages to exclude (glob patterns).
     #[serde(default)]
     pub exclude: Vec<String>,
-}
-
-/// Configuration for a release branch.
-///
-/// Branches can be:
-/// - **Stable** (default): `main`, `master` — produces normal releases
-/// - **Prerelease**: `beta`, `next`, `alpha` — produces e.g. `2.0.0-beta.1`
-/// - **Maintenance**: `1.x`, `2.x` — produces patch/minor releases for old majors
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum BranchConfig {
-    /// Simple branch name (stable channel, no prerelease).
-    Name(String),
-    /// Full branch configuration with optional channel/prerelease/maintenance.
-    Full(BranchDef),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BranchDef {
-    /// Branch name or glob pattern (e.g. "main", "beta", "test-*", "1.x").
-    pub name: String,
-
-    /// Prerelease channel configuration.
-    /// - `true`:     use the branch name as the channel (e.g. branch `test-foo` → `1.2.0-test-foo.1`)
-    /// - `"beta"`:   use a fixed channel name (e.g. `1.2.0-beta.1`)
-    /// - absent/false: stable releases
-    #[serde(default)]
-    pub prerelease: PrereleaseSetting,
-
-    /// Whether this is a maintenance branch (e.g. "1.x").
-    /// When true, the major version is capped to the number in the branch name.
-    /// Breaking changes are demoted to minor bumps.
-    #[serde(default)]
-    pub maintenance: bool,
-}
-
-/// How to determine the prerelease channel for a branch.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum PrereleaseSetting {
-    /// Not a prerelease branch.
-    #[default]
-    Disabled,
-    /// `true` means use the branch name as the prerelease channel.
-    Flag(bool),
-    /// A fixed channel name (e.g. "beta", "rc").
-    Channel(String),
-}
-
-impl BranchConfig {
-    pub fn name(&self) -> &str {
-        match self {
-            BranchConfig::Name(n) => n,
-            BranchConfig::Full(def) => &def.name,
-        }
-    }
-
-    /// Resolve the prerelease channel for a given actual branch name.
-    /// Returns `None` for stable branches.
-    pub fn resolve_prerelease(&self, actual_branch: &str) -> Option<String> {
-        match self {
-            BranchConfig::Name(_) => None,
-            BranchConfig::Full(def) => match &def.prerelease {
-                PrereleaseSetting::Disabled => None,
-                PrereleaseSetting::Flag(false) => None,
-                PrereleaseSetting::Flag(true) => Some(actual_branch.to_string()),
-                PrereleaseSetting::Channel(ch) => Some(ch.clone()),
-            },
-        }
-    }
-
-    pub fn is_maintenance(&self) -> bool {
-        match self {
-            BranchConfig::Name(_) => false,
-            BranchConfig::Full(def) => def.maintenance,
-        }
-    }
-}
-
-/// Resolved branch context for the current HEAD.
-#[derive(Debug, Clone)]
-pub struct BranchContext {
-    /// The current branch name.
-    pub branch_name: String,
-    /// Prerelease channel (e.g. "beta"), or None for stable.
-    pub prerelease: Option<String>,
-    /// Whether this is a maintenance branch.
-    pub maintenance: bool,
 }
 
 /// Configuration for a single plugin.
@@ -216,29 +131,11 @@ pub fn find_repo_root(start: &Path) -> Result<(PathBuf, git2::Repository)> {
     Ok((workdir, repo))
 }
 
-/// Detect the current branch and resolve it against the branch config.
-/// Returns `None` if the current branch is not configured for releases.
 pub fn resolve_branch_context(
     repo: &git2::Repository,
     config: &Config,
 ) -> Result<Option<BranchContext>> {
-    let head = repo.head().context("Failed to get HEAD")?;
-    let branch_name = head
-        .shorthand()
-        .unwrap_or("HEAD")
-        .to_string();
-
-    for bc in &config.branches {
-        if glob_match(bc.name(), &branch_name) {
-            return Ok(Some(BranchContext {
-                prerelease: bc.resolve_prerelease(&branch_name),
-                branch_name: branch_name.clone(),
-                maintenance: bc.is_maintenance(),
-            }));
-        }
-    }
-
-    Ok(None)
+    branch::resolve_branch_context(repo, &config.branches)
 }
 
 /// Match a string against a glob pattern using the `glob-match` crate.
@@ -368,80 +265,19 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_yaml_simple_branches() {
-        let yaml = r#"
-branches:
-  - main
-  - develop
-plugins:
-  - name: changelog
-"#;
-        let config: Config = serde_saphyr::from_str(yaml).unwrap();
-        assert_eq!(config.branches[0].name(), "main");
-        assert_eq!(config.branches[1].name(), "develop");
-        assert!(config.branches[0].resolve_prerelease("main").is_none());
-    }
-
-    #[test]
-    fn test_parse_yaml_rich_branches() {
+    fn test_parse_yaml_config() {
         let yaml = r#"
 branches:
   - main
   - name: beta
     prerelease: beta
-  - name: next
-    prerelease: next
-  - name: "test-*"
-    prerelease: true
-  - name: "1.x"
-    maintenance: true
+plugins:
+  - name: changelog
 "#;
         let config: Config = serde_saphyr::from_str(yaml).unwrap();
-        assert_eq!(config.branches.len(), 5);
+        assert_eq!(config.branches.len(), 2);
         assert_eq!(config.branches[0].name(), "main");
-        assert!(config.branches[0].resolve_prerelease("main").is_none());
-
         assert_eq!(config.branches[1].name(), "beta");
-        assert_eq!(config.branches[1].resolve_prerelease("beta").as_deref(), Some("beta"));
-
-        assert_eq!(config.branches[2].name(), "next");
-        assert_eq!(config.branches[2].resolve_prerelease("next").as_deref(), Some("next"));
-
-        // `prerelease: true` uses the actual branch name as channel
-        assert_eq!(config.branches[3].name(), "test-*");
-        assert_eq!(
-            config.branches[3].resolve_prerelease("test-hello").as_deref(),
-            Some("test-hello")
-        );
-
-        assert_eq!(config.branches[4].name(), "1.x");
-        assert!(config.branches[4].is_maintenance());
-    }
-
-    #[test]
-    fn test_prerelease_true_never_produces_literal_true() {
-        let yaml = r#"
-branches:
-  - name: "feature-*"
-    prerelease: true
-"#;
-        let config: Config = serde_saphyr::from_str(yaml).unwrap();
-        let branch = &config.branches[0];
-
-        let channel = branch.resolve_prerelease("feature-abc").unwrap();
-        assert_eq!(channel, "feature-abc");
-        assert_ne!(channel, "true");
-    }
-
-    #[test]
-    fn test_prerelease_false_is_stable() {
-        let yaml = r#"
-branches:
-  - name: staging
-    prerelease: false
-"#;
-        let config: Config = serde_saphyr::from_str(yaml).unwrap();
-        assert!(config.branches[0].resolve_prerelease("staging").is_none());
     }
 
     #[test]

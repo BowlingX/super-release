@@ -2,6 +2,7 @@ pub mod changelog;
 pub mod git_commit;
 pub mod git_tag;
 pub mod npm;
+pub mod subprocess;
 
 use anyhow::Result;
 
