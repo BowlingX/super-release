@@ -17,7 +17,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bowlingx/super-release.git"
+    "url": "git+https://github.com/BowlingX/super-release.git"
   },
   "keywords": [
     "semantic-release",
