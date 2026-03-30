@@ -1,24 +1,16 @@
 {
-  "name": "super-release",
-  "version": "0.1.0",
-  "type": "module",
-  "description": "A fast semantic-release alternative for monorepos, written in Rust",
-  "license": "MIT",
   "bin": {
     "super-release": "npm/bin/super-release.js"
   },
-  "scripts": {
-    "postinstall": "node npm/install.js"
+  "description": "A fast semantic-release alternative for monorepos, written in Rust",
+  "engines": {
+    "node": ">=18"
   },
   "files": [
     "npm/bin",
     "npm/install.js",
     "README.md"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/BowlingX/super-release.git"
-  },
   "keywords": [
     "semantic-release",
     "monorepo",
@@ -26,12 +18,20 @@
     "changelog",
     "conventional-commits"
   ],
+  "license": "MIT",
+  "name": "super-release",
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "engines": {
-    "node": ">=18"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BowlingX/super-release.git"
   },
-  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
+  "scripts": {
+    "postinstall": "node npm/install.js"
+  },
+  "type": "module",
+  "version": "0.2.0"
 }
