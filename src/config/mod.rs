@@ -290,7 +290,7 @@ plugins:
         assert!(glob_match("*.x", "2.x"));
         assert!(glob_match("*.x", "15.x"));
         assert!(glob_match("test-*", "test-foo"));
-        assert!(glob_match("test-*", "test-tsmain-1460"));
+        assert!(glob_match("test-*", "test-some-branch"));
         assert!(!glob_match("test-*", "dev-foo"));
 
         // Scoped packages
