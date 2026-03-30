@@ -303,6 +303,13 @@ Benchmark (2001 commits, 8 packages, Apple Silicon):
 | All commits since initial tag | 0.11s |
 | 100 commits since recent tags | 0.035s |
 
+## Acknowledgements
+
+super-release is inspired by and builds on the ideas of:
+
+- **[semantic-release](https://github.com/semantic-release/semantic-release)** — the original automated release tool that pioneered conventional-commit-based versioning. super-release follows the same philosophy but reimagines it in Rust with first-class monorepo support.
+- **[git-cliff](https://github.com/orhun/git-cliff)** — powers the changelog generation via `git-cliff-core`. An excellent standalone changelog generator with rich templating support.
+
 ## License
 
-MIT
+[MIT](LICENSE)
