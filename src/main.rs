@@ -53,8 +53,8 @@ macro_rules! printfl {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    let (repo_root, repo) = config::find_repo_root(&cli.path)
-        .context("Could not find a git repository")?;
+    let (repo_root, repo) =
+        config::find_repo_root(&cli.path).context("Could not find a git repository")?;
 
     let cfg = if let Some(config_path) = &cli.config {
         config::load_config(config_path)?
@@ -73,8 +73,7 @@ fn main() -> Result<()> {
     }
     printfl!();
 
-    let pkg_resolver = resolver::create_resolver("node")
-        .expect("node resolver must exist");
+    let pkg_resolver = resolver::create_resolver("node").expect("node resolver must exist");
     let mut packages = pkg_resolver.discover(&repo_root)?;
     pkg_resolver.resolve_dependencies(&mut packages);
 
@@ -83,7 +82,11 @@ fn main() -> Result<()> {
     }
 
     if !cfg.exclude.is_empty() {
-        packages.retain(|p| !cfg.exclude.iter().any(|pat| config::glob_match(pat, &p.name)));
+        packages.retain(|p| {
+            !cfg.exclude
+                .iter()
+                .any(|pat| config::glob_match(pat, &p.name))
+        });
     }
 
     if packages.is_empty() {
@@ -101,7 +104,12 @@ fn main() -> Result<()> {
             "   {} {} ({})",
             style("*").dim(),
             style(&pkg.name).bold(),
-            style(pkg.path.display()).dim()
+            style(if pkg.path.as_os_str().is_empty() {
+                ".".into()
+            } else {
+                pkg.path.display().to_string()
+            })
+            .dim()
         );
     }
     printfl!();
@@ -109,7 +117,10 @@ fn main() -> Result<()> {
     let branch_ctx = match config::resolve_branch_context(&repo, &cfg)? {
         Some(ctx) => ctx,
         None => {
-            let head = repo.head().ok().and_then(|h| h.shorthand().map(String::from));
+            let head = repo
+                .head()
+                .ok()
+                .and_then(|h| h.shorthand().map(String::from));
             let branch = head.as_deref().unwrap_or("HEAD");
             printfl!(
                 "{} Branch '{}' is not configured for releases, skipping.",
@@ -161,8 +172,7 @@ fn main() -> Result<()> {
     );
     printfl!();
 
-    let releases =
-        version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
+    let releases = version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
 
     if releases.is_empty() {
         printfl!(
