@@ -16,7 +16,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
@@ -44,7 +44,7 @@ jobs:
             artifact: super-release-darwin-aarch64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -80,17 +80,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: pnpm/action-setup@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-node@v6
 
       - uses: actions/download-artifact@v4
         with:
