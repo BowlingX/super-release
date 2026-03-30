@@ -9,6 +9,9 @@ tag_format: "v{version}"
 plugins:
   - name: changelog
   - name: npm
+  - name: exec
+    options:
+      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"
   - name: git-commit
     options:
       message: "chore(release): {releases} [skip ci]"

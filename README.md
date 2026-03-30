@@ -193,6 +193,23 @@ plugins:
         - "--otp=123456"
       package_manager: yarn       # force specific PM (default: auto-detect)
 
+  - name: exec
+    options:
+      # Run for all packages (omit `packages` to run for all)
+      prepare_cmd: "echo Releasing {name} v{version}"
+      # Or filter to specific packages:
+      # packages: ["@acme/core"]
+
+  # Multiple exec blocks for different packages:
+  # - name: exec
+  #   options:
+  #     packages: ["my-rust-project"]
+  #     prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"
+  # - name: exec
+  #   options:
+  #     packages: ["@acme/*"]
+  #     publish_cmd: "deploy.sh {name} {version}"
+
   - name: git-commit
     options:
       # Commit message template. Placeholders:
@@ -215,6 +232,7 @@ plugins:
 |---|---|---|
 | `changelog` | Generates/updates changelog per package (parallel) | -- |
 | `npm` | Updates `package.json` versions (auto-detects npm/yarn/pnpm) | Publishes packages (parallel within dependency levels) |
+| `exec` | Runs custom shell command per package | Runs custom shell command per package |
 | `git-commit` | -- | Stages changed files, commits with release message, optionally pushes |
 | `git-tag` | -- | Creates annotated git tags, optionally pushes |
 

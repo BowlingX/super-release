@@ -1,4 +1,5 @@
 pub mod changelog;
+pub mod exec;
 pub mod git_commit;
 pub mod git_tag;
 pub mod npm;
@@ -56,6 +57,7 @@ pub trait Plugin: Send + Sync {
 pub fn create_plugin(name: &str) -> Option<Box<dyn Plugin>> {
     match name {
         "changelog" => Some(Box::new(changelog::ChangelogPlugin)),
+        "exec" => Some(Box::new(exec::ExecPlugin)),
         "npm" => Some(Box::new(npm::NpmPlugin)),
         "git-commit" => Some(Box::new(git_commit::GitCommitPlugin)),
         "git-tag" => Some(Box::new(git_tag::GitTagPlugin)),
