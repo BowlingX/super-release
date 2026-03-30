@@ -28,7 +28,7 @@ pub fn get_version_tags(
     let tag_re = config.tag_match_regex(package_name, is_root);
 
     for tag_name in tag_names.iter().flatten() {
-        let version = extract_version_from_tag(tag_name, &tag_re, package_name, is_root);
+        let version = extract_version_from_tag(tag_name, &tag_re);
         let Some(v) = version else { continue };
 
         if version_matches_branch(&v, branch_ctx) {
@@ -39,28 +39,14 @@ pub fn get_version_tags(
     Ok(tags)
 }
 
-/// Extract a semver Version from a tag name using the configured regex + legacy fallback.
+/// Extract a semver Version from a tag name using the configured regex.
 fn extract_version_from_tag(
     tag_name: &str,
     tag_re: &Option<regex::Regex>,
-    package_name: &str,
-    is_root: bool,
 ) -> Option<Version> {
-    if let Some(re) = tag_re
-        && let Some(caps) = re.captures(tag_name)
-        && let Ok(v) = Version::parse(&caps["version"])
-    {
-        return Some(v);
-    }
-
-    if !is_root
-        && let Some(version_str) = tag_name.strip_prefix(&format!("{}@", package_name))
-        && let Ok(v) = Version::parse(version_str)
-    {
-        return Some(v);
-    }
-
-    None
+    let re = tag_re.as_ref()?;
+    let caps = re.captures(tag_name)?;
+    Version::parse(&caps["version"]).ok()
 }
 
 /// Check if a version is relevant for the current branch context.

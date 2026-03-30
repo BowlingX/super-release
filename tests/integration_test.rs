@@ -297,8 +297,8 @@ fn test_monorepo_tag_format_in_dry_run() {
 }
 
 #[test]
-fn test_legacy_tag_format_migration() {
-    // Verify that old @name@version tags are still recognized
+fn test_custom_tag_format_package() {
+    // Verify that tag_format_package "{name}@{version}" works (e.g. semantic-release compat)
     let dir = TempDir::new().unwrap();
     let root = dir.path();
 
@@ -314,10 +314,19 @@ fn test_legacy_tag_format_migration() {
     .unwrap();
     fs::write(root.join("packages/lib/src/index.ts"), "// v1").unwrap();
 
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+tag_format_package: "{name}@{version}"
+plugins:
+  - name: git-tag
+"#,
+    )
+    .unwrap();
+
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "chore: init"]);
-    // Old legacy tag format
-    git(root, &["tag", "-a", "my-lib@1.0.0", "-m", "legacy tag"]);
+    git(root, &["tag", "-a", "my-lib@1.0.0", "-m", "v1"]);
 
     fs::write(root.join("packages/lib/src/index.ts"), "// v1.1").unwrap();
     git(root, &["add", "."]);
@@ -330,7 +339,7 @@ fn test_legacy_tag_format_migration() {
         .assert()
         .success()
         .stdout(predicate::str::contains("1.1.0"))
-        .stdout(predicate::str::contains("minor"));
+        .stdout(predicate::str::contains("my-lib@1.1.0"));
 }
 
 #[test]

@@ -15,7 +15,6 @@ Analyzes [conventional commits](https://www.conventionalcommits.org/) to determi
 - Configurable tag format templates
 - Dependency-aware npm publish (topological order)
 - Dry-run mode with pretty, truncated output
-- Legacy tag format migration (`@scope/pkg@1.0.0`)
 
 ## Installation
 
@@ -174,7 +173,7 @@ tag_format_package: "{name}/v{version}"    # -> @acme/core/v1.2.3
 tag_format_package: "{name}@{version}"     # -> @acme/core@1.2.3 (semantic-release compat)
 ```
 
-**Legacy support**: Tags in `{name}@{version}` format are always recognized as a fallback, regardless of the configured template. This allows migrating from semantic-release without retagging.
+To migrate from semantic-release's tag format, set `tag_format_package: "{name}@{version}"`.
 
 #### `plugins`
 
@@ -188,19 +187,36 @@ Ordered list of plugins to execute. Each plugin runs its `prepare` phase (all pl
 
 Default: `[changelog, npm, git-tag]`
 
+#### `packages`
+
+Optional list of glob patterns to include. When set, only packages whose name matches at least one pattern are released. Supports `*`, `?`, `[...]`, and `{a,b}` alternation.
+
+```yaml
+# Only release packages in the @acme scope
+packages:
+  - "@acme/*"
+
+# Release specific packages
+packages:
+  - "@acme/core"
+  - "@acme/utils"
+
+# Multiple scopes
+packages:
+  - "{@acme/*,@tools/*}"
+```
+
+Default: all discovered packages.
+
 #### `exclude`
 
-List of package name substrings to exclude from releasing. Useful for private root packages in monorepos.
+List of glob patterns to exclude from releasing. Applied after `packages`.
 
 ```yaml
 exclude:
   - my-monorepo-root
-  - internal-tools
+  - "@acme/internal-*"
 ```
-
-#### `packages`
-
-Optional list of package name patterns to include. When set, only matching packages are released. By default, all discovered packages are included.
 
 ## Monorepo Structure
 

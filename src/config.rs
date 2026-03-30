@@ -128,7 +128,7 @@ pub struct PluginConfig {
 
     /// Plugin-specific options
     #[serde(default)]
-    pub options: serde_yaml::Value,
+    pub options: serde_json::Value,
 }
 
 fn default_branches() -> Vec<BranchConfig> {
@@ -150,15 +150,15 @@ fn default_plugins() -> Vec<PluginConfig> {
     vec![
         PluginConfig {
             name: "changelog".into(),
-            options: serde_yaml::Value::Null,
+            options: serde_json::Value::Null,
         },
         PluginConfig {
             name: "npm".into(),
-            options: serde_yaml::Value::Null,
+            options: serde_json::Value::Null,
         },
         PluginConfig {
             name: "git-tag".into(),
-            options: serde_yaml::Value::Null,
+            options: serde_json::Value::Null,
         },
     ]
 }
@@ -198,7 +198,7 @@ pub fn load_config(repo_root: &Path) -> Result<Config> {
 fn load_config_from_path(path: &Path) -> Result<Config> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("reading config file: {}", path.display()))?;
-    let config: Config = serde_yaml::from_str(&content)
+    let config: Config = serde_saphyr::from_str(&content)
         .with_context(|| format!("parsing config file: {}", path.display()))?;
     Ok(config)
 }
@@ -227,7 +227,7 @@ pub fn resolve_branch_context(
 
     // Find matching branch config
     for bc in &config.branches {
-        if branch_matches(bc.name(), &branch_name) {
+        if glob_match(bc.name(), &branch_name) {
             return Ok(BranchContext {
                 prerelease: bc.resolve_prerelease(&branch_name),
                 branch_name: branch_name.clone(),
@@ -244,24 +244,12 @@ pub fn resolve_branch_context(
     })
 }
 
-/// Check if a branch name matches a branch config pattern.
-/// Supports literal names and simple glob patterns:
-/// - `"main"` matches `"main"` exactly
-/// - `"*.x"` matches `"1.x"`, `"2.x"`, etc.
-fn branch_matches(pattern: &str, branch: &str) -> bool {
-    if pattern == branch {
-        return true;
-    }
-    if pattern.contains('*') {
-        // Convert glob to regex: escape dots, replace * with wildcard
-        let re_pattern = pattern
-            .replace('.', r"\.")
-            .replace('*', r"[^/]+");
-        if let Ok(re) = regex::Regex::new(&format!("^{}$", re_pattern)) {
-            return re.is_match(branch);
-        }
-    }
-    false
+/// Match a string against a glob pattern using the `glob-match` crate.
+/// Supports `*`, `?`, `[...]` character classes, and `{a,b}` alternations.
+///
+/// Examples: `"@acme/*"` matches `"@acme/core"`, `"test-*"` matches `"test-foo"`.
+pub fn glob_match(pattern: &str, value: &str) -> bool {
+    glob_match::glob_match(pattern, value)
 }
 
 impl Config {
@@ -400,7 +388,7 @@ branches:
 plugins:
   - name: changelog
 "#;
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(config.branches[0].name(), "main");
         assert_eq!(config.branches[1].name(), "develop");
         assert!(config.branches[0].resolve_prerelease("main").is_none());
@@ -420,7 +408,7 @@ branches:
   - name: "1.x"
     maintenance: true
 "#;
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = serde_saphyr::from_str(yaml).unwrap();
         assert_eq!(config.branches.len(), 5);
         assert_eq!(config.branches[0].name(), "main");
         assert!(config.branches[0].resolve_prerelease("main").is_none());
@@ -443,12 +431,30 @@ branches:
     }
 
     #[test]
-    fn test_branch_matches() {
-        assert!(branch_matches("main", "main"));
-        assert!(!branch_matches("main", "master"));
-        assert!(branch_matches("1.x", "1.x"));
-        assert!(!branch_matches("1.x", "2.x"));
-        assert!(branch_matches("*.x", "2.x"));
-        assert!(branch_matches("*.x", "15.x"));
+    fn test_glob_match() {
+        // Exact
+        assert!(glob_match("main", "main"));
+        assert!(!glob_match("main", "master"));
+
+        // Wildcard *
+        assert!(glob_match("*.x", "2.x"));
+        assert!(glob_match("*.x", "15.x"));
+        assert!(glob_match("test-*", "test-foo"));
+        assert!(glob_match("test-*", "test-tsmain-1460"));
+        assert!(!glob_match("test-*", "dev-foo"));
+
+        // Scoped packages
+        assert!(glob_match("@acme/*", "@acme/core"));
+        assert!(glob_match("@acme/*", "@acme/utils"));
+        assert!(!glob_match("@acme/*", "@other/core"));
+
+        // Alternation
+        assert!(glob_match("{@acme/*,@tools/*}", "@acme/core"));
+        assert!(glob_match("{@acme/*,@tools/*}", "@tools/cli"));
+        assert!(!glob_match("{@acme/*,@tools/*}", "@other/lib"));
+
+        // Single char ?
+        assert!(glob_match("pkg-?", "pkg-a"));
+        assert!(!glob_match("pkg-?", "pkg-ab"));
     }
 }

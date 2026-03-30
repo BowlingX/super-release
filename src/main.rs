@@ -79,11 +79,19 @@ fn main() -> Result<()> {
     package::resolve_local_dependencies(&mut packages);
 
     if !cli.package.is_empty() {
-        packages.retain(|p| cli.package.iter().any(|f| p.name.contains(f)));
+        packages.retain(|p| {
+            cli.package.iter().any(|f| {
+                p.name.contains(f) || config::glob_match(f, &p.name)
+            })
+        });
+    }
+
+    if let Some(ref include) = cfg.packages {
+        packages.retain(|p| include.iter().any(|pat| config::glob_match(pat, &p.name)));
     }
 
     if !cfg.exclude.is_empty() {
-        packages.retain(|p| !cfg.exclude.iter().any(|e| p.name.contains(e)));
+        packages.retain(|p| !cfg.exclude.iter().any(|pat| config::glob_match(pat, &p.name)));
     }
 
     if packages.is_empty() {
