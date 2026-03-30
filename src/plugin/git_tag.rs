@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::Deserialize;
 
-use super::{parse_options, Plugin, PluginConfig, PluginContext};
+use super::{parse_options, subprocess, Plugin, PluginConfig, PluginContext};
 use crate::git;
 use crate::package::Package;
 use crate::version::PackageRelease;
@@ -80,12 +80,12 @@ impl Plugin for GitTagPlugin {
         }
 
         if !ctx.dry_run && opts.push && !created_tags.is_empty() {
-            println!("  [git-tag] Pushing {} tag(s) to {} ...", created_tags.len(), opts.remote);
             let mut cmd = std::process::Command::new("git");
             cmd.arg("push").arg(&opts.remote).current_dir(ctx.repo_root);
             for tag in &created_tags {
                 cmd.arg(tag);
             }
+            println!("  [git-tag] Running: {}", subprocess::format_command(&cmd));
             let output = cmd.output()?;
 
             if !output.status.success() {

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::process::Command;
 
-use super::{parse_options, Plugin, PluginConfig, PluginContext};
+use super::{parse_options, subprocess, Plugin, PluginConfig, PluginContext};
 use crate::package::Package;
 use crate::version::PackageRelease;
 
@@ -100,32 +100,33 @@ impl Plugin for GitCommitPlugin {
         for path in &opts.paths {
             add_cmd.arg(path);
         }
+        println!("  [git-commit] Running: {}", subprocess::format_command(&add_cmd));
         let output = add_cmd.output().context("Failed to run git add")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("git add failed: {}", stderr);
         }
 
-        // Check if there's anything to commit
         let has_changes = !Command::new("git")
             .args(["diff", "--cached", "--quiet"])
             .current_dir(ctx.repo_root)
             .status()
             .context("Failed to check git status")?
-            .success(); // exit code 1 means there are diffs
+            .success();
 
         if !has_changes {
             println!("  [git-commit] Nothing to commit");
             return Ok(());
         }
 
-        let output = Command::new("git")
+        let mut commit_cmd = Command::new("git");
+        commit_cmd
             .arg("commit")
             .arg("-m")
             .arg(&message)
-            .current_dir(ctx.repo_root)
-            .output()
-            .context("Failed to run git commit")?;
+            .current_dir(ctx.repo_root);
+        println!("  [git-commit] Running: {}", subprocess::format_command(&commit_cmd));
+        let output = commit_cmd.output().context("Failed to run git commit")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -133,15 +134,14 @@ impl Plugin for GitCommitPlugin {
         }
         println!("  [git-commit] Committed: {}", message);
 
-        // Push
         if opts.push {
-            println!("  [git-commit] Pushing to {} ...", opts.remote);
-            let output = Command::new("git")
+            let mut push_cmd = Command::new("git");
+            push_cmd
                 .arg("push")
                 .arg(&opts.remote)
-                .current_dir(ctx.repo_root)
-                .output()
-                .context("Failed to run git push")?;
+                .current_dir(ctx.repo_root);
+            println!("  [git-commit] Running: {}", subprocess::format_command(&push_cmd));
+            let output = push_cmd.output().context("Failed to run git push")?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);

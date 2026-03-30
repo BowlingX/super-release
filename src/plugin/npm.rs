@@ -191,23 +191,6 @@ fn publish_one(
     let pkg_dir = repo_root.join(&pkg.path);
     let label = format!("{} v{}", pkg.name, release.next_version);
 
-    if dry_run {
-        let mut extra = String::new();
-        if let Some(tag) = dist_tag {
-            extra.push_str(&format!(" --tag {}", tag));
-        }
-        if !opts.publish_args.is_empty() {
-            extra.push_str(&format!(" {}", opts.publish_args.join(" ")));
-        }
-        println!(
-            "  [{}] Would publish {} from {}{}",
-            pm, label, pkg_dir.display(), extra,
-        );
-        return Ok(());
-    }
-
-    println!("  [{}] Publishing {} ...", pm, label);
-
     let cmd = pm.publish_command(
         &pkg_dir,
         &opts.access,
@@ -217,6 +200,12 @@ fn publish_one(
         &opts.publish_args,
     );
 
+    if dry_run {
+        println!("  [{}] Would publish {}: {}", pm, label, subprocess::format_command(&cmd));
+        return Ok(());
+    }
+
+    println!("  [{}] Publishing {}: {}", pm, label, subprocess::format_command(&cmd));
     subprocess::run_command(cmd, &label, &pm.to_string())
 }
 

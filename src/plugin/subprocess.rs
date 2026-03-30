@@ -5,6 +5,27 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+/// Format a Command for display (program + args).
+pub fn format_command(cmd: &Command) -> String {
+    let prog = cmd.get_program().to_string_lossy().to_string();
+    let args: Vec<String> = cmd
+        .get_args()
+        .map(|a| {
+            let s = a.to_string_lossy();
+            if s.contains(' ') {
+                format!("\"{}\"", s)
+            } else {
+                s.to_string()
+            }
+        })
+        .collect();
+    if args.is_empty() {
+        prog
+    } else {
+        format!("{} {}", prog, args.join(" "))
+    }
+}
+
 /// Run a command with output handling:
 /// - TTY: shows a spinner with the last output line
 /// - On success: prints last 3 lines as summary
