@@ -38,9 +38,6 @@ super-release --dry-run
 # Run a release
 super-release
 
-# Only release specific packages
-super-release -p core -p utils
-
 # Use 4 threads for commit analysis
 super-release -j 4
 ```
@@ -54,7 +51,6 @@ Options:
   -n, --dry-run            Show what would happen without making changes
   -C, --path <PATH>        Repository root [default: .]
   -c, --config <CONFIG>    Path to config file [default: .release.yaml]
-  -p, --package <PACKAGE>  Only process specific packages (repeatable)
   -v, --verbose            Verbose output
   -j, --jobs <JOBS>        Parallel jobs for commit analysis [default: 50% of CPUs]
   -h, --help               Print help

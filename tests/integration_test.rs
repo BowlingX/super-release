@@ -160,19 +160,35 @@ fn test_dry_run_no_changes() {
 }
 
 #[test]
-fn test_package_filter() {
+fn test_package_include_filter() {
     let dir = setup_monorepo();
 
-    super_release_bin()
+    // Override config to only include core
+    fs::write(
+        dir.path().join(".release.yaml"),
+        r#"
+branches:
+  - main
+packages:
+  - "@myorg/core"
+plugins:
+  - name: git-tag
+"#,
+    )
+    .unwrap();
+
+    let output = super_release_bin()
         .arg("--dry-run")
         .arg("-C")
         .arg(dir.path().to_str().unwrap())
-        .arg("-p")
-        .arg("core")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("@myorg/core"))
-        .stdout(predicate::str::contains("1.1.0"));
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Failed:\n{}", stdout);
+    assert!(stdout.contains("@myorg/core"), "Should include core:\n{}", stdout);
+    assert!(!stdout.contains("@myorg/utils"), "Should exclude utils:\n{}", stdout);
+    assert!(stdout.contains("1.1.0"), "Should have core bump:\n{}", stdout);
 }
 
 #[test]

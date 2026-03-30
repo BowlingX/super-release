@@ -33,10 +33,6 @@ struct Cli {
     #[arg(long, short = 'c')]
     config: Option<PathBuf>,
 
-    /// Only process specific packages (can be specified multiple times)
-    #[arg(long, short = 'p')]
-    package: Vec<String>,
-
     /// Verbose output
     #[arg(long, short = 'v')]
     verbose: bool,
@@ -81,14 +77,6 @@ fn main() -> Result<()> {
         .expect("node resolver must exist");
     let mut packages = pkg_resolver.discover(&repo_root)?;
     pkg_resolver.resolve_dependencies(&mut packages);
-
-    if !cli.package.is_empty() {
-        packages.retain(|p| {
-            cli.package.iter().any(|f| {
-                p.name.contains(f) || config::glob_match(f, &p.name)
-            })
-        });
-    }
 
     if let Some(ref include) = cfg.packages {
         packages.retain(|p| include.iter().any(|pat| config::glob_match(pat, &p.name)));

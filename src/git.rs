@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::commit::{parse_conventional_commit, ConventionalCommit};
+use crate::commit::{ConventionalCommit, parse_conventional_commit};
 use crate::config::{BranchContext, Config};
 
 /// All resolved tag information, computed once and shared across packages.
@@ -28,7 +28,13 @@ impl TagIndex {
         let tag_names = repo.tag_names(None)?;
         let pkg_regexes: Vec<(&str, bool, Option<regex::Regex>)> = packages
             .iter()
-            .map(|(name, is_root)| (name.as_str(), *is_root, config.tag_match_regex(name, *is_root)))
+            .map(|(name, is_root)| {
+                (
+                    name.as_str(),
+                    *is_root,
+                    config.tag_match_regex(name, *is_root),
+                )
+            })
             .collect();
 
         // Collect candidate tags (matching regex + branch filter) with their OIDs
@@ -112,10 +118,7 @@ impl TagIndex {
     }
 }
 
-fn extract_version_from_tag(
-    tag_name: &str,
-    tag_re: &Option<regex::Regex>,
-) -> Option<Version> {
+fn extract_version_from_tag(tag_name: &str, tag_re: &Option<regex::Regex>) -> Option<Version> {
     let re = tag_re.as_ref()?;
     let caps = re.captures(tag_name)?;
     Version::parse(&caps["version"]).ok()
@@ -177,8 +180,7 @@ pub fn get_commits_since(
     let pb = ProgressBar::new(total as u64);
     pb.set_style(
         ProgressStyle::default_bar()
-            .template("  {spinner:.cyan} Analyzing {pos}/{len} commits [{bar:30.cyan/dim}] {eta}")
-            .unwrap()
+            .template("  {spinner:.cyan} Analyzing {pos}/{len} commits [{bar:30.cyan/dim}] {eta}")?
             .progress_chars("━╸─"),
     );
 
