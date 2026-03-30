@@ -268,6 +268,85 @@ fn get_changed_files(repo: &Repository, oid: git2::Oid) -> Result<Vec<String>> {
     Ok(files)
 }
 
+/// Fetch the remote tracking branch and check if local is behind.
+/// Returns an error if the remote has commits not present locally.
+pub fn check_branch_up_to_date(repo_root: &Path, repo: &Repository, branch_name: &str) -> Result<()> {
+    let local_ref = match repo.find_branch(branch_name, git2::BranchType::Local) {
+        Ok(b) => b,
+        Err(_) => return Ok(()),
+    };
+
+    let upstream = match local_ref.upstream() {
+        Ok(u) => u,
+        Err(_) => return Ok(()),
+    };
+
+    // Get the remote name (e.g. "origin") from the upstream ref "refs/remotes/origin/main"
+    let upstream_name = upstream
+        .get()
+        .name()
+        .unwrap_or("");
+    let remote_name = upstream_name
+        .strip_prefix("refs/remotes/")
+        .and_then(|s| s.split('/').next())
+        .unwrap_or("origin");
+
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("  {spinner:.cyan} Fetching {msg}...")
+            .unwrap(),
+    );
+    spinner.set_message(format!("{}/{}", remote_name, branch_name));
+    spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    let status = std::process::Command::new("git")
+        .args(["fetch", remote_name, branch_name, "--quiet"])
+        .current_dir(repo_root)
+        .status();
+
+    spinner.finish_and_clear();
+
+    if let Ok(s) = status
+        && !s.success()
+    {
+        return Ok(());
+    }
+
+    // Re-read upstream after fetch
+    let local_ref = repo.find_branch(branch_name, git2::BranchType::Local)?;
+    let upstream = match local_ref.upstream() {
+        Ok(u) => u,
+        Err(_) => return Ok(()),
+    };
+
+    let local_oid = local_ref
+        .get()
+        .peel_to_commit()?
+        .id();
+    let remote_oid = upstream
+        .get()
+        .peel_to_commit()?
+        .id();
+
+    if local_oid == remote_oid {
+        return Ok(());
+    }
+
+    // Check if remote is ahead of local
+    let (_, behind) = repo.graph_ahead_behind(local_oid, remote_oid)?;
+    if behind > 0 {
+        anyhow::bail!(
+            "Local branch '{}' is {} commit(s) behind its remote. \
+             Pull the latest changes before releasing.",
+            branch_name,
+            behind
+        );
+    }
+
+    Ok(())
+}
+
 pub fn create_tag(repo: &Repository, tag_name: &str, message: &str) -> Result<()> {
     let head = repo.head()?.peel_to_commit()?;
     let sig = repo.signature()?;

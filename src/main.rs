@@ -120,6 +120,10 @@ fn main() -> Result<()> {
         }
     };
 
+    if !cli.dry_run {
+        git::check_branch_up_to_date(&repo_root, &repo, &branch_ctx.branch_name)?;
+    }
+
     if cli.verbose || cli.dry_run {
         let channel_info = if let Some(ref pre) = branch_ctx.prerelease {
             format!(" (prerelease: {})", pre)

@@ -906,3 +906,156 @@ plugins:
         stdout
     );
 }
+
+#[test]
+fn test_behind_remote_blocks_release() {
+    // Set up a bare "remote" repo, clone it, then advance the remote.
+    // The local clone should be behind and super-release should refuse to release.
+    let remote_dir = TempDir::new().unwrap();
+    let local_dir = TempDir::new().unwrap();
+    let remote = remote_dir.path();
+    let local = local_dir.path();
+
+    // Create bare remote
+    git(remote, &["init", "--bare", "-b", "main"]);
+
+    // Clone it
+    process::Command::new("git")
+        .args(["clone", remote.to_str().unwrap(), local.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    git(local, &["config", "user.email", "test@test.com"]);
+    git(local, &["config", "user.name", "Test"]);
+
+    fs::write(
+        local.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(local.join("index.js"), "// v1").unwrap();
+    fs::write(
+        local.join(".release.yaml"),
+        "branches: [main]\nplugins:\n  - name: git-tag\n",
+    )
+    .unwrap();
+
+    git(local, &["add", "."]);
+    git(local, &["commit", "-m", "chore: init"]);
+    git(local, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+    git(local, &["push", "origin", "main", "--tags"]);
+
+    // Add a local feature commit
+    fs::write(local.join("index.js"), "// v1.1").unwrap();
+    git(local, &["add", "."]);
+    git(local, &["commit", "-m", "feat: local feature"]);
+
+    // Simulate remote advancing: clone again to a tmp dir, commit, push
+    let tmp_clone = TempDir::new().unwrap();
+    process::Command::new("git")
+        .args([
+            "clone",
+            remote.to_str().unwrap(),
+            tmp_clone.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    git(tmp_clone.path(), &["config", "user.email", "test@test.com"]);
+    git(tmp_clone.path(), &["config", "user.name", "Test"]);
+    fs::write(tmp_clone.path().join("other.txt"), "remote change").unwrap();
+    git(tmp_clone.path(), &["add", "."]);
+    git(tmp_clone.path(), &["commit", "-m", "feat: remote commit"]);
+    git(tmp_clone.path(), &["push", "origin", "main"]);
+
+    // Fetch so local knows about the remote commit
+    git(local, &["fetch", "origin"]);
+
+    // Now local is behind remote — release should fail
+    let output = super_release_bin()
+        .arg("-C")
+        .arg(local.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !output.status.success(),
+        "Should fail when behind remote:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stderr.contains("behind") || stdout.contains("behind"),
+        "Should mention 'behind':\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+}
+
+#[test]
+fn test_behind_remote_skipped_in_dry_run() {
+    // Same setup as above but with --dry-run — should succeed
+    let remote_dir = TempDir::new().unwrap();
+    let local_dir = TempDir::new().unwrap();
+    let remote = remote_dir.path();
+    let local = local_dir.path();
+
+    git(remote, &["init", "--bare", "-b", "main"]);
+
+    process::Command::new("git")
+        .args(["clone", remote.to_str().unwrap(), local.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    git(local, &["config", "user.email", "test@test.com"]);
+    git(local, &["config", "user.name", "Test"]);
+
+    fs::write(
+        local.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(local.join("index.js"), "// v1").unwrap();
+    fs::write(
+        local.join(".release.yaml"),
+        "branches: [main]\nplugins:\n  - name: git-tag\n",
+    )
+    .unwrap();
+
+    git(local, &["add", "."]);
+    git(local, &["commit", "-m", "chore: init"]);
+    git(local, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+    git(local, &["push", "origin", "main", "--tags"]);
+
+    fs::write(local.join("index.js"), "// v1.1").unwrap();
+    git(local, &["add", "."]);
+    git(local, &["commit", "-m", "feat: local feature"]);
+
+    // Advance remote
+    let tmp_clone = TempDir::new().unwrap();
+    process::Command::new("git")
+        .args([
+            "clone",
+            remote.to_str().unwrap(),
+            tmp_clone.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    git(tmp_clone.path(), &["config", "user.email", "test@test.com"]);
+    git(tmp_clone.path(), &["config", "user.name", "Test"]);
+    fs::write(tmp_clone.path().join("other.txt"), "remote change").unwrap();
+    git(tmp_clone.path(), &["add", "."]);
+    git(tmp_clone.path(), &["commit", "-m", "feat: remote commit"]);
+    git(tmp_clone.path(), &["push", "origin", "main"]);
+
+    git(local, &["fetch", "origin"]);
+
+    // Dry-run should still succeed even though we're behind
+    super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(local.to_str().unwrap())
+        .assert()
+        .success();
+}
