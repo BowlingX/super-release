@@ -8,7 +8,7 @@ use semver::{Prerelease, Version};
 use crate::commit::{BumpLevel, ConventionalCommit};
 use crate::config::{BranchContext, Config};
 use crate::git;
-use crate::package::{file_to_package, Package};
+use crate::package::{Package, file_to_package};
 
 /// The release plan for a single package.
 #[derive(Debug, Clone)]
@@ -47,22 +47,20 @@ pub fn determine_releases(
 
     let tag_infos: Vec<PkgTagInfo> = packages
         .iter()
-        .map(|pkg| {
-            match tag_index.latest_version(&pkg.name) {
-                Some((tag_name, ver)) => {
-                    let oid = git::tag_to_oid(repo, &tag_name)?;
-                    Ok(PkgTagInfo {
-                        current_version: ver,
-                        cutoff_oid: oid,
-                        cutoff_tag: Some(tag_name),
-                    })
-                }
-                None => Ok(PkgTagInfo {
-                    current_version: pkg.version.clone(),
-                    cutoff_oid: None,
-                    cutoff_tag: None,
-                }),
+        .map(|pkg| match tag_index.latest_version(&pkg.name) {
+            Some((tag_name, ver)) => {
+                let oid = git::tag_to_oid(repo, &tag_name)?;
+                Ok(PkgTagInfo {
+                    current_version: ver,
+                    cutoff_oid: oid,
+                    cutoff_tag: Some(tag_name),
+                })
             }
+            None => Ok(PkgTagInfo {
+                current_version: pkg.version.clone(),
+                cutoff_oid: None,
+                cutoff_tag: None,
+            }),
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -174,10 +172,7 @@ pub fn determine_releases(
 
 /// Find the oldest tag among all packages by comparing commit timestamps.
 /// Returns the tag name that should be used as the walk boundary.
-fn find_oldest_tag<'a>(
-    repo: &Repository,
-    tag_infos: &'a [PkgTagInfo],
-) -> Result<Option<&'a str>> {
+fn find_oldest_tag<'a>(repo: &Repository, tag_infos: &'a [PkgTagInfo]) -> Result<Option<&'a str>> {
     let mut oldest: Option<(&str, i64)> = None;
 
     for info in tag_infos {
@@ -465,49 +460,61 @@ mod tests {
     #[test]
     fn test_chore_no_bump() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_next_version(&v, &[make_commit("chore: update deps")], &stable_ctx()).unwrap();
+        let result =
+            calculate_next_version(&v, &[make_commit("chore: update deps")], &stable_ctx())
+                .unwrap();
         assert_eq!(result, v, "chore should not bump");
     }
 
     #[test]
     fn test_docs_no_bump() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_next_version(&v, &[make_commit("docs: update readme")], &stable_ctx()).unwrap();
+        let result =
+            calculate_next_version(&v, &[make_commit("docs: update readme")], &stable_ctx())
+                .unwrap();
         assert_eq!(result, v, "docs should not bump");
     }
 
     #[test]
     fn test_ci_no_bump() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_next_version(&v, &[make_commit("ci: update workflow")], &stable_ctx()).unwrap();
+        let result =
+            calculate_next_version(&v, &[make_commit("ci: update workflow")], &stable_ctx())
+                .unwrap();
         assert_eq!(result, v, "ci should not bump");
     }
 
     #[test]
     fn test_refactor_no_bump() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_next_version(&v, &[make_commit("refactor: simplify")], &stable_ctx()).unwrap();
+        let result =
+            calculate_next_version(&v, &[make_commit("refactor: simplify")], &stable_ctx())
+                .unwrap();
         assert_eq!(result, v, "refactor should not bump");
     }
 
     #[test]
     fn test_style_no_bump() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_next_version(&v, &[make_commit("style: format")], &stable_ctx()).unwrap();
+        let result =
+            calculate_next_version(&v, &[make_commit("style: format")], &stable_ctx()).unwrap();
         assert_eq!(result, v, "style should not bump");
     }
 
     #[test]
     fn test_test_no_bump() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_next_version(&v, &[make_commit("test: add tests")], &stable_ctx()).unwrap();
+        let result =
+            calculate_next_version(&v, &[make_commit("test: add tests")], &stable_ctx()).unwrap();
         assert_eq!(result, v, "test should not bump");
     }
 
     #[test]
     fn test_build_no_bump() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_next_version(&v, &[make_commit("build: update config")], &stable_ctx()).unwrap();
+        let result =
+            calculate_next_version(&v, &[make_commit("build: update config")], &stable_ctx())
+                .unwrap();
         assert_eq!(result, v, "build should not bump");
     }
 
@@ -560,7 +567,10 @@ mod tests {
         ];
         // Only fix + feat passed (chore filtered out before calling this).
         // feat (minor) wins over fix (patch).
-        let bump_commits: Vec<_> = commits.into_iter().filter(|c| c.bump > BumpLevel::None).collect();
+        let bump_commits: Vec<_> = commits
+            .into_iter()
+            .filter(|c| c.bump > BumpLevel::None)
+            .collect();
         let result = calculate_stable_version(&v, &bump_commits).unwrap();
         assert_eq!(result, Version::parse("1.1.0").unwrap());
     }
@@ -581,21 +591,24 @@ mod tests {
     #[test]
     fn test_prerelease_feat_from_stable() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_prerelease_version(&v, &[make_commit("feat: thing")], "beta").unwrap();
+        let result =
+            calculate_prerelease_version(&v, &[make_commit("feat: thing")], "beta").unwrap();
         assert_eq!(result, Version::parse("1.1.0-beta.1").unwrap());
     }
 
     #[test]
     fn test_prerelease_fix_from_stable() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_prerelease_version(&v, &[make_commit("fix: thing")], "beta").unwrap();
+        let result =
+            calculate_prerelease_version(&v, &[make_commit("fix: thing")], "beta").unwrap();
         assert_eq!(result, Version::parse("1.0.1-beta.1").unwrap());
     }
 
     #[test]
     fn test_prerelease_breaking_from_stable() {
         let v = Version::parse("1.0.0").unwrap();
-        let result = calculate_prerelease_version(&v, &[make_commit("feat!: break")], "beta").unwrap();
+        let result =
+            calculate_prerelease_version(&v, &[make_commit("feat!: break")], "beta").unwrap();
         assert_eq!(result, Version::parse("2.0.0-beta.1").unwrap());
     }
 

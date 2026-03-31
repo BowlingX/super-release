@@ -270,7 +270,11 @@ fn get_changed_files(repo: &Repository, oid: git2::Oid) -> Result<Vec<String>> {
 
 /// Fetch the remote tracking branch and check if local is behind.
 /// Returns an error if the remote has commits not present locally.
-pub fn check_branch_up_to_date(repo_root: &Path, repo: &Repository, branch_name: &str) -> Result<()> {
+pub fn check_branch_up_to_date(
+    repo_root: &Path,
+    repo: &Repository,
+    branch_name: &str,
+) -> Result<()> {
     let local_ref = match repo.find_branch(branch_name, git2::BranchType::Local) {
         Ok(b) => b,
         Err(_) => return Ok(()),
@@ -282,10 +286,7 @@ pub fn check_branch_up_to_date(repo_root: &Path, repo: &Repository, branch_name:
     };
 
     // Get the remote name (e.g. "origin") from the upstream ref "refs/remotes/origin/main"
-    let upstream_name = upstream
-        .get()
-        .name()
-        .unwrap_or("");
+    let upstream_name = upstream.get().name().unwrap_or("");
     let remote_name = upstream_name
         .strip_prefix("refs/remotes/")
         .and_then(|s| s.split('/').next())
@@ -320,14 +321,8 @@ pub fn check_branch_up_to_date(repo_root: &Path, repo: &Repository, branch_name:
         Err(_) => return Ok(()),
     };
 
-    let local_oid = local_ref
-        .get()
-        .peel_to_commit()?
-        .id();
-    let remote_oid = upstream
-        .get()
-        .peel_to_commit()?
-        .id();
+    let local_oid = local_ref.get().peel_to_commit()?.id();
+    let remote_oid = upstream.get().peel_to_commit()?.id();
 
     if local_oid == remote_oid {
         return Ok(());

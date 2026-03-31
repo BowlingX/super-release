@@ -127,12 +127,25 @@ fn test_full_release_single_package() {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "Release failed:\nstdout: {}\nstderr: {}", stdout, stderr);
+    assert!(
+        output.status.success(),
+        "Release failed:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
 
     // Changelog was written
     let changelog = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
-    assert!(changelog.contains("1.1.0"), "Changelog missing version:\n{}", changelog);
-    assert!(changelog.contains("new feature"), "Changelog missing commit:\n{}", changelog);
+    assert!(
+        changelog.contains("1.1.0"),
+        "Changelog missing version:\n{}",
+        changelog
+    );
+    assert!(
+        changelog.contains("new feature"),
+        "Changelog missing commit:\n{}",
+        changelog
+    );
 
     // Git commit was created
     let log = process::Command::new("git")
@@ -186,7 +199,11 @@ fn test_only_plugin_files_are_committed() {
         .output()
         .unwrap();
     let msg = String::from_utf8_lossy(&log.stdout);
-    assert!(msg.contains("chore(release)"), "Should have release commit:\n{}", msg);
+    assert!(
+        msg.contains("chore(release)"),
+        "Should have release commit:\n{}",
+        msg
+    );
 
     // The CHANGELOG.md should be in the commit
     let show = process::Command::new("git")
@@ -279,8 +296,16 @@ fn test_idempotent_rerun_monorepo() {
         .output()
         .unwrap();
     let tag_list = String::from_utf8_lossy(&tags.stdout);
-    assert!(tag_list.contains("@test/core/v1.1.0"), "Missing core tag:\n{}", tag_list);
-    assert!(tag_list.contains("@test/utils/v1.0.1"), "Missing utils tag:\n{}", tag_list);
+    assert!(
+        tag_list.contains("@test/core/v1.1.0"),
+        "Missing core tag:\n{}",
+        tag_list
+    );
+    assert!(
+        tag_list.contains("@test/utils/v1.0.1"),
+        "Missing utils tag:\n{}",
+        tag_list
+    );
 
     // Second run
     let output = super_release_bin()
@@ -344,7 +369,11 @@ plugins: []
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "First run failed:\n{}", stdout);
-    assert!(stdout.contains("Created tag: v1.1.0"), "Should create tag:\n{}", stdout);
+    assert!(
+        stdout.contains("Created tag: v1.1.0"),
+        "Should create tag:\n{}",
+        stdout
+    );
 
     // Manually add another commit so the tool finds something to do
     fs::write(root.join("index.js"), "// v1.2").unwrap();
@@ -444,8 +473,16 @@ fn test_release_commit_message_format() {
         .unwrap();
     let msg = String::from_utf8_lossy(&log.stdout);
 
-    assert!(msg.contains("chore(release)"), "Should have release prefix:\n{}", msg);
-    assert!(msg.contains("my-app@1.1.0"), "Should mention package version:\n{}", msg);
+    assert!(
+        msg.contains("chore(release)"),
+        "Should have release prefix:\n{}",
+        msg
+    );
+    assert!(
+        msg.contains("my-app@1.1.0"),
+        "Should mention package version:\n{}",
+        msg
+    );
     assert!(msg.contains("[skip ci]"), "Should have skip ci:\n{}", msg);
 }
 
@@ -468,8 +505,16 @@ fn test_release_commit_message_monorepo() {
         .unwrap();
     let msg = String::from_utf8_lossy(&log.stdout);
 
-    assert!(msg.contains("@test/core@1.1.0"), "Should mention core:\n{}", msg);
-    assert!(msg.contains("@test/utils@1.0.1"), "Should mention utils:\n{}", msg);
+    assert!(
+        msg.contains("@test/core@1.1.0"),
+        "Should mention core:\n{}",
+        msg
+    );
+    assert!(
+        msg.contains("@test/utils@1.0.1"),
+        "Should mention utils:\n{}",
+        msg
+    );
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -505,9 +550,15 @@ fn test_dry_run_is_readonly() {
 
     // Verify nothing changed
     let pkg_after = fs::read_to_string(root.join("package.json")).unwrap();
-    assert_eq!(pkg_before, pkg_after, "package.json should not change in dry-run");
+    assert_eq!(
+        pkg_before, pkg_after,
+        "package.json should not change in dry-run"
+    );
 
-    assert!(!root.join("CHANGELOG.md").exists(), "CHANGELOG should not be created in dry-run");
+    assert!(
+        !root.join("CHANGELOG.md").exists(),
+        "CHANGELOG should not be created in dry-run"
+    );
 
     let tags_after = process::Command::new("git")
         .args(["tag", "-l"])

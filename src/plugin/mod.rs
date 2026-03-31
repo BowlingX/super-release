@@ -61,9 +61,7 @@ pub fn create_plugin(name: &str) -> Option<Box<dyn Plugin>> {
 }
 
 /// Helper to deserialize plugin options from the JSON value.
-pub fn parse_options<T: serde::de::DeserializeOwned + Default>(
-    config: &PluginConfig,
-) -> Result<T> {
+pub fn parse_options<T: serde::de::DeserializeOwned + Default>(config: &PluginConfig) -> Result<T> {
     if config.options.is_null() {
         return Ok(T::default());
     }

@@ -3,8 +3,8 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::{parse_options, subprocess, Plugin, PluginConfig, PluginContext};
-use crate::package::{topological_sort, Package};
+use super::{Plugin, PluginConfig, PluginContext, parse_options, subprocess};
+use crate::package::{Package, topological_sort};
 use crate::pm::PackageManager;
 use crate::version::PackageRelease;
 
@@ -79,7 +79,9 @@ impl Plugin for NpmPlugin {
                 .filter_map(|name| {
                     let release = release_set.get(name.as_str())?;
                     let pkg = packages.iter().find(|p| p.name == *name)?;
-                    Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm, dist_tag))
+                    Some(publish_one(
+                        repo_root, dry_run, pkg, release, &opts, pm, dist_tag,
+                    ))
                 })
                 .collect();
 
@@ -134,18 +136,37 @@ fn publish_one(
     let pm_name = pm.to_string();
 
     if dry_run {
-        println!("  [{}] Would publish {}: {}", pm_name, label, subprocess::format_command(&cmd));
-        println!("    {}", console::style(format!("in {}", pkg_dir.display())).dim());
+        println!(
+            "  [{}] Would publish {}: {}",
+            pm_name,
+            label,
+            subprocess::format_command(&cmd)
+        );
+        println!(
+            "    {}",
+            console::style(format!("in {}", pkg_dir.display())).dim()
+        );
         return Ok(());
     }
 
-    println!("  [{}] Publishing {}: {}", pm_name, label, subprocess::format_command(&cmd));
-    println!("    {}", console::style(format!("in {}", pkg_dir.display())).dim());
-    subprocess::run_command(cmd, &subprocess::RunOptions {
-        label: &label,
-        plugin_name: &pm_name,
-        is_recoverable: Some(is_already_published),
-    })
+    println!(
+        "  [{}] Publishing {}: {}",
+        pm_name,
+        label,
+        subprocess::format_command(&cmd)
+    );
+    println!(
+        "    {}",
+        console::style(format!("in {}", pkg_dir.display())).dim()
+    );
+    subprocess::run_command(
+        cmd,
+        &subprocess::RunOptions {
+            label: &label,
+            plugin_name: &pm_name,
+            is_recoverable: Some(is_already_published),
+        },
+    )
 }
 
 fn dependency_levels(
@@ -205,7 +226,9 @@ mod tests {
             "npm ERR! 403 You cannot publish over the previously published versions: 1.0.0"
         ));
         assert!(is_already_published("npm error code EPUBLISHCONFLICT"));
-        assert!(is_already_published("This package has already been published"));
+        assert!(is_already_published(
+            "This package has already been published"
+        ));
         assert!(is_already_published("Version already exists"));
         assert!(!is_already_published("npm ERR! 403 Forbidden"));
         assert!(!is_already_published("network timeout"));
@@ -254,8 +277,14 @@ mod tests {
             path: std::path::PathBuf::from(format!("packages/{}", name)),
             manifest_path: std::path::PathBuf::from(format!("packages/{}/package.json", name)),
             is_root: false,
-            local_dependencies: deps.iter().map(|d| (d.to_string(), "^1.0.0".to_string())).collect(),
-            dependencies: deps.iter().map(|d| (d.to_string(), "^1.0.0".to_string())).collect(),
+            local_dependencies: deps
+                .iter()
+                .map(|d| (d.to_string(), "^1.0.0".to_string()))
+                .collect(),
+            dependencies: deps
+                .iter()
+                .map(|d| (d.to_string(), "^1.0.0".to_string()))
+                .collect(),
             dev_dependencies: HashMap::new(),
         }
     }

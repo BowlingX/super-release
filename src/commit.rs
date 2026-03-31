@@ -62,9 +62,8 @@ pub fn parse_conventional_commit(hash: &str, message: &str) -> Option<Convention
         .map(|(_, b)| b.trim().to_string())
         .filter(|b| !b.is_empty());
 
-    let breaking = bang
-        || message.contains("BREAKING CHANGE:")
-        || message.contains("BREAKING-CHANGE:");
+    let breaking =
+        bang || message.contains("BREAKING CHANGE:") || message.contains("BREAKING-CHANGE:");
 
     let bump = if breaking {
         BumpLevel::Major
@@ -197,6 +196,9 @@ mod tests {
     fn test_body_extraction() {
         let msg = "feat: something\n\nThis is the body\nwith multiple lines";
         let c = parse_conventional_commit("abc123", msg).unwrap();
-        assert_eq!(c.body.as_deref(), Some("This is the body\nwith multiple lines"));
+        assert_eq!(
+            c.body.as_deref(),
+            Some("This is the body\nwith multiple lines")
+        );
     }
 }

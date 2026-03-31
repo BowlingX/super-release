@@ -198,11 +198,24 @@ pub fn glob_match(pattern: &str, value: &str) -> bool {
 
 impl Config {
     fn tag_template(&self, is_root: bool) -> &str {
-        if is_root { &self.tag_format } else { &self.tag_format_package }
+        if is_root {
+            &self.tag_format
+        } else {
+            &self.tag_format_package
+        }
     }
 
-    pub fn format_tag(&self, package_name: &str, version: &semver::Version, is_root: bool) -> String {
-        render_tag_template(self.tag_template(is_root), package_name, &version.to_string())
+    pub fn format_tag(
+        &self,
+        package_name: &str,
+        version: &semver::Version,
+        is_root: bool,
+    ) -> String {
+        render_tag_template(
+            self.tag_template(is_root),
+            package_name,
+            &version.to_string(),
+        )
     }
 
     pub fn tag_match_regex(&self, package_name: &str, is_root: bool) -> Option<regex::Regex> {
@@ -253,7 +266,10 @@ mod tests {
     fn test_format_tag_subpackage() {
         let config = Config::default();
         let v = semver::Version::new(1, 2, 3);
-        assert_eq!(config.format_tag("@myorg/core", &v, false), "@myorg/core/v1.2.3");
+        assert_eq!(
+            config.format_tag("@myorg/core", &v, false),
+            "@myorg/core/v1.2.3"
+        );
     }
 
     #[test]
@@ -278,7 +294,10 @@ mod tests {
         };
         let v = semver::Version::new(1, 5, 0);
         assert_eq!(config.format_tag("root", &v, true), "v1.5.0");
-        assert_eq!(config.format_tag("@scope/pkg", &v, false), "@scope/pkg@1.5.0");
+        assert_eq!(
+            config.format_tag("@scope/pkg", &v, false),
+            "@scope/pkg@1.5.0"
+        );
     }
 
     #[test]

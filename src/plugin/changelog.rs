@@ -11,14 +11,13 @@ use git_cliff_core::commit::Commit as CliffCommit;
 use git_cliff_core::config::Config as CliffConfig;
 use git_cliff_core::release::Release as CliffRelease;
 
-use super::{parse_options, Plugin, PluginConfig, PluginContext};
+use super::{Plugin, PluginConfig, PluginContext, parse_options};
 use crate::commit::ConventionalCommit;
 use crate::package::Package;
 use crate::version::PackageRelease;
 
-static CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
-    "".parse().expect("Failed to load git-cliff default config")
-});
+static CLIFF_CONFIG: LazyLock<CliffConfig> =
+    LazyLock::new(|| "".parse().expect("Failed to load git-cliff default config"));
 
 /// Options for the changelog plugin.
 #[derive(Debug, Clone, Deserialize)]
@@ -98,7 +97,11 @@ impl Plugin for ChangelogPlugin {
                     .collect::<Vec<_>>()
                     .join("\n");
 
-                println!("  [changelog] Would update {} ({})", path.display(), pkg_name);
+                println!(
+                    "  [changelog] Would update {} ({})",
+                    path.display(),
+                    pkg_name
+                );
                 println!("{}", preview);
                 if total_lines > opts.preview_lines {
                     println!(

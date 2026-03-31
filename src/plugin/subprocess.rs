@@ -45,9 +45,12 @@ pub struct RunOptions<'a> {
 pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("[{}] Failed to spawn command for {}", opts.plugin_name, opts.label))?;
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "[{}] Failed to spawn command for {}",
+            opts.plugin_name, opts.label
+        )
+    })?;
 
     let is_tty = console::Term::stdout().is_term();
 
@@ -98,7 +101,12 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
             return Ok(());
         }
 
-        let tail: Vec<&str> = all_output.iter().map(|s| s.as_str()).rev().take(20).collect();
+        let tail: Vec<&str> = all_output
+            .iter()
+            .map(|s| s.as_str())
+            .rev()
+            .take(20)
+            .collect();
         let tail: Vec<&str> = tail.into_iter().rev().collect();
         eprintln!(
             "  [{}] {} output:\n{}",

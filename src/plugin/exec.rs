@@ -3,7 +3,7 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::process::Command;
 
-use super::{parse_options, subprocess, Plugin, PluginConfig, PluginContext};
+use super::{Plugin, PluginConfig, PluginContext, parse_options, subprocess};
 use crate::package::Package;
 use crate::version::PackageRelease;
 
@@ -68,10 +68,7 @@ impl Plugin for ExecPlugin {
     }
 }
 
-fn resolve_files(
-    patterns: &[String],
-    releases: &[PackageRelease],
-) -> Vec<std::path::PathBuf> {
+fn resolve_files(patterns: &[String], releases: &[PackageRelease]) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     for release in releases {
         for pattern in patterns {
@@ -105,21 +102,30 @@ fn run_for_releases(
 
             if dry_run {
                 println!("  [{}] Would run: {}", plugin_name, cmd_str);
-                println!("    {}", console::style(format!("in {}", repo_root.display())).dim());
+                println!(
+                    "    {}",
+                    console::style(format!("in {}", repo_root.display())).dim()
+                );
                 return Ok(());
             }
 
             println!("  [{}] Running: {}", plugin_name, cmd_str);
-            println!("    {}", console::style(format!("in {}", repo_root.display())).dim());
+            println!(
+                "    {}",
+                console::style(format!("in {}", repo_root.display())).dim()
+            );
 
             let mut cmd = Command::new("sh");
             cmd.arg("-c").arg(&cmd_str).current_dir(repo_root);
 
-            subprocess::run_command(cmd, &subprocess::RunOptions {
-                label: &cmd_str,
-                plugin_name: &plugin_name,
-                is_recoverable: None,
-            })
+            subprocess::run_command(
+                cmd,
+                &subprocess::RunOptions {
+                    label: &cmd_str,
+                    plugin_name: &plugin_name,
+                    is_recoverable: None,
+                },
+            )
         })
         .collect();
 

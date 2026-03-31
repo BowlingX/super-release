@@ -119,7 +119,10 @@ fn find_package_jsons(
                 continue;
             }
             find_package_jsons(root, &path, repo, packages)?;
-        } else if path.file_name().map(|f| f == "package.json").unwrap_or(false)
+        } else if path
+            .file_name()
+            .map(|f| f == "package.json")
+            .unwrap_or(false)
             && let Some(pkg) = parse_package_json(root, &path)?
         {
             packages.push(pkg);
@@ -153,10 +156,7 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
         .strip_prefix(root)
         .unwrap_or(manifest_path)
         .to_path_buf();
-    let rel_dir = rel_manifest
-        .parent()
-        .unwrap_or(Path::new(""))
-        .to_path_buf();
+    let rel_dir = rel_manifest.parent().unwrap_or(Path::new("")).to_path_buf();
 
     let dependencies = pkg_json.dependencies.unwrap_or_default();
     let dev_dependencies = pkg_json.dev_dependencies.unwrap_or_default();

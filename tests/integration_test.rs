@@ -29,7 +29,11 @@ fn setup_monorepo() -> TempDir {
         r#"{"name": "@myorg/core", "version": "1.0.0"}"#,
     )
     .unwrap();
-    fs::write(root.join("packages/core/src/index.ts"), "export const x = 1;").unwrap();
+    fs::write(
+        root.join("packages/core/src/index.ts"),
+        "export const x = 1;",
+    )
+    .unwrap();
 
     // Create packages/utils (depends on core)
     fs::create_dir_all(root.join("packages/utils/src")).unwrap();
@@ -38,23 +42,53 @@ fn setup_monorepo() -> TempDir {
         r#"{"name": "@myorg/utils", "version": "1.0.0", "dependencies": {"@myorg/core": "^1.0.0"}}"#,
     )
     .unwrap();
-    fs::write(root.join("packages/utils/src/index.ts"), "export const y = 2;").unwrap();
+    fs::write(
+        root.join("packages/utils/src/index.ts"),
+        "export const y = 2;",
+    )
+    .unwrap();
 
     // Initial commit
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "chore: initial commit"]);
 
     // Tag initial versions (new format: {name}/v{version} for sub-packages)
-    git(root, &["tag", "-a", "@myorg/core/v1.0.0", "-m", "Release @myorg/core v1.0.0"]);
-    git(root, &["tag", "-a", "@myorg/utils/v1.0.0", "-m", "Release @myorg/utils v1.0.0"]);
+    git(
+        root,
+        &[
+            "tag",
+            "-a",
+            "@myorg/core/v1.0.0",
+            "-m",
+            "Release @myorg/core v1.0.0",
+        ],
+    );
+    git(
+        root,
+        &[
+            "tag",
+            "-a",
+            "@myorg/utils/v1.0.0",
+            "-m",
+            "Release @myorg/utils v1.0.0",
+        ],
+    );
 
     // Add a feature commit to core
-    fs::write(root.join("packages/core/src/index.ts"), "export const x = 1;\nexport const z = 3;").unwrap();
+    fs::write(
+        root.join("packages/core/src/index.ts"),
+        "export const x = 1;\nexport const z = 3;",
+    )
+    .unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "feat(core): add new export z"]);
 
     // Add a fix commit to utils
-    fs::write(root.join("packages/utils/src/index.ts"), "export const y = 2;\n// fixed").unwrap();
+    fs::write(
+        root.join("packages/utils/src/index.ts"),
+        "export const y = 2;\n// fixed",
+    )
+    .unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "fix(utils): fix import issue"]);
 
@@ -86,7 +120,9 @@ fn test_help_flag() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("fast semantic-release alternative"))
+        .stdout(predicate::str::contains(
+            "fast semantic-release alternative",
+        ))
         .stdout(predicate::str::contains("--dry-run"));
 }
 
@@ -246,7 +282,11 @@ fn test_mixed_commits_only_bump_from_relevant() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "Failed:\n{}", stdout);
     assert!(stdout.contains("1.1.0"), "Should bump minor:\n{}", stdout);
-    assert!(stdout.contains("minor"), "Should be minor bump:\n{}", stdout);
+    assert!(
+        stdout.contains("minor"),
+        "Should be minor bump:\n{}",
+        stdout
+    );
 }
 
 #[test]
@@ -275,9 +315,21 @@ plugins:
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "Failed:\n{}", stdout);
-    assert!(stdout.contains("@myorg/core"), "Should include core:\n{}", stdout);
-    assert!(!stdout.contains("@myorg/utils"), "Should exclude utils:\n{}", stdout);
-    assert!(stdout.contains("1.1.0"), "Should have core bump:\n{}", stdout);
+    assert!(
+        stdout.contains("@myorg/core"),
+        "Should include core:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("@myorg/utils"),
+        "Should exclude utils:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("1.1.0"),
+        "Should have core bump:\n{}",
+        stdout
+    );
 }
 
 #[test]
@@ -304,7 +356,14 @@ fn test_breaking_change_major_bump() {
     // Breaking change
     fs::write(root.join("index.js"), "export default {}").unwrap();
     git(root, &["add", "."]);
-    git(root, &["commit", "-m", "feat!: switch to ESM\n\nBREAKING CHANGE: CommonJS no longer supported"]);
+    git(
+        root,
+        &[
+            "commit",
+            "-m",
+            "feat!: switch to ESM\n\nBREAKING CHANGE: CommonJS no longer supported",
+        ],
+    );
 
     super_release_bin()
         .arg("--dry-run")
@@ -634,9 +693,17 @@ plugins:
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Must stay in 1.x range
-    assert!(stdout.contains("1.6.0"), "Expected 1.6.0 but got:\n{}", stdout);
+    assert!(
+        stdout.contains("1.6.0"),
+        "Expected 1.6.0 but got:\n{}",
+        stdout
+    );
     // Must NOT jump to 2.0.0
-    assert!(!stdout.contains("2.0.0"), "Should not contain 2.0.0:\n{}", stdout);
+    assert!(
+        !stdout.contains("2.0.0"),
+        "Should not contain 2.0.0:\n{}",
+        stdout
+    );
 }
 
 #[test]
@@ -775,7 +842,10 @@ fn test_prerelease_branch_increment_with_pattern() {
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "chore: init"]);
     git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
-    git(root, &["tag", "-a", "v1.1.0-test-foo.2", "-m", "prerelease"]);
+    git(
+        root,
+        &["tag", "-a", "v1.1.0-test-foo.2", "-m", "prerelease"],
+    );
 
     fs::write(root.join("index.js"), "// more work").unwrap();
     git(root, &["add", "."]);
@@ -1012,11 +1082,7 @@ fn test_behind_remote_blocks_release() {
     )
     .unwrap();
     fs::write(local.join("index.js"), "// v1").unwrap();
-    fs::write(
-        local.join(".release.yaml"),
-        "branches: [main]\nplugins:\n",
-    )
-    .unwrap();
+    fs::write(local.join(".release.yaml"), "branches: [main]\nplugins:\n").unwrap();
 
     git(local, &["add", "."]);
     git(local, &["commit", "-m", "chore: init"]);
@@ -1095,11 +1161,7 @@ fn test_behind_remote_skipped_in_dry_run() {
     )
     .unwrap();
     fs::write(local.join("index.js"), "// v1").unwrap();
-    fs::write(
-        local.join(".release.yaml"),
-        "branches: [main]\nplugins:\n",
-    )
-    .unwrap();
+    fs::write(local.join(".release.yaml"), "branches: [main]\nplugins:\n").unwrap();
 
     git(local, &["add", "."]);
     git(local, &["commit", "-m", "chore: init"]);

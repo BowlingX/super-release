@@ -42,7 +42,11 @@ fn create_monorepo_packages(root: &Path, dep_prefix: &str) {
         r#"{"name": "@test/core", "version": "1.0.0"}"#,
     )
     .unwrap();
-    fs::write(root.join("packages/core/src/index.ts"), "export const v = 1;").unwrap();
+    fs::write(
+        root.join("packages/core/src/index.ts"),
+        "export const v = 1;",
+    )
+    .unwrap();
 
     // packages/utils depends on core
     fs::create_dir_all(root.join("packages/utils/src")).unwrap();
@@ -54,7 +58,11 @@ fn create_monorepo_packages(root: &Path, dep_prefix: &str) {
         ),
     )
     .unwrap();
-    fs::write(root.join("packages/utils/src/index.ts"), "export const u = 1;").unwrap();
+    fs::write(
+        root.join("packages/utils/src/index.ts"),
+        "export const u = 1;",
+    )
+    .unwrap();
 
     // packages/app depends on utils
     fs::create_dir_all(root.join("packages/app/src")).unwrap();
@@ -66,7 +74,11 @@ fn create_monorepo_packages(root: &Path, dep_prefix: &str) {
         ),
     )
     .unwrap();
-    fs::write(root.join("packages/app/src/index.ts"), "export const a = 1;").unwrap();
+    fs::write(
+        root.join("packages/app/src/index.ts"),
+        "export const a = 1;",
+    )
+    .unwrap();
 }
 
 fn write_release_config(root: &Path, extra: &str) {
@@ -155,11 +167,7 @@ fn test_npm_workspace_dry_run() {
     assert!(stdout.contains("@test/core"), "Missing core:\n{}", stdout);
     assert!(stdout.contains("1.1.0"), "Missing core bump:\n{}", stdout);
     assert!(stdout.contains("@test/utils"), "Missing utils:\n{}", stdout);
-    assert!(
-        stdout.contains("[npm]"),
-        "Should detect npm:\n{}",
-        stdout
-    );
+    assert!(stdout.contains("[npm]"), "Should detect npm:\n{}", stdout);
 }
 
 #[test]

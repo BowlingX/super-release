@@ -282,11 +282,9 @@ fn main() -> Result<()> {
     printfl!();
 
     // Core: bump package manifest versions before plugins run
-    printfl!(
-        "{} Bumping package versions",
-        style(">>").bold().blue()
-    );
-    let mut modified_files = pkg_resolver.bump_versions(&repo_root, &packages, &releases, cli.dry_run)?;
+    printfl!("{} Bumping package versions", style(">>").bold().blue());
+    let mut modified_files =
+        pkg_resolver.bump_versions(&repo_root, &packages, &releases, cli.dry_run)?;
 
     let plugin_ctx = plugin::PluginContext {
         repo_root: &repo_root,
@@ -351,8 +349,18 @@ fn main() -> Result<()> {
         };
 
         p.verify(&plugin_ctx, plugin_cfg)?;
-        modified_files.extend(p.prepare(&plugin_ctx, plugin_cfg, &filtered_packages, &filtered_releases)?);
-        modified_files.extend(p.publish(&plugin_ctx, plugin_cfg, &filtered_packages, &filtered_releases)?);
+        modified_files.extend(p.prepare(
+            &plugin_ctx,
+            plugin_cfg,
+            &filtered_packages,
+            &filtered_releases,
+        )?);
+        modified_files.extend(p.publish(
+            &plugin_ctx,
+            plugin_cfg,
+            &filtered_packages,
+            &filtered_releases,
+        )?);
 
         printfl!();
     }
@@ -362,7 +370,14 @@ fn main() -> Result<()> {
         "{} Finalizing git commit and tags",
         style(">>").bold().blue()
     );
-    finalize_git(&repo_root, &repo, &cfg, &releases, &modified_files, cli.dry_run)?;
+    finalize_git(
+        &repo_root,
+        &repo,
+        &cfg,
+        &releases,
+        &modified_files,
+        cli.dry_run,
+    )?;
 
     if cli.dry_run {
         printfl!(
@@ -505,10 +520,7 @@ fn finalize_git(
             continue;
         }
 
-        let tag_message = format!(
-            "Release {} v{}",
-            release.package_name, release.next_version
-        );
+        let tag_message = format!("Release {} v{}", release.package_name, release.next_version);
         git::create_tag(repo, &tag_name, &tag_message)?;
         printfl!("  [git] Created tag: {}", tag_name);
         created_tags.push(tag_name);
@@ -556,7 +568,11 @@ fn show_next_version(
                 root.ok_or_else(|| {
                     anyhow::anyhow!(
                         "Multiple packages found. Use --package to select one: {}",
-                        packages.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                        packages
+                            .iter()
+                            .map(|p| p.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     )
                 })?
             }

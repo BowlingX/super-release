@@ -110,7 +110,6 @@ impl PackageManager {
             cmd.arg("--provenance");
         }
 
-
         match self {
             PackageManager::Pnpm => {
                 cmd.arg("--no-git-checks");
@@ -125,7 +124,6 @@ impl PackageManager {
 
         cmd
     }
-
 }
 
 /// Try to detect from the `packageManager` field in root package.json.
@@ -171,7 +169,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
         std::fs::write(dir.path().join("package-lock.json"), "{}").unwrap();
-        assert_eq!(PackageManager::detect(dir.path()).unwrap(), PackageManager::Npm);
+        assert_eq!(
+            PackageManager::detect(dir.path()).unwrap(),
+            PackageManager::Npm
+        );
     }
 
     #[test]
@@ -179,7 +180,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
         std::fs::write(dir.path().join("yarn.lock"), "").unwrap();
-        assert_eq!(PackageManager::detect(dir.path()).unwrap(), PackageManager::Yarn);
+        assert_eq!(
+            PackageManager::detect(dir.path()).unwrap(),
+            PackageManager::Yarn
+        );
     }
 
     #[test]
@@ -187,7 +191,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
         std::fs::write(dir.path().join("pnpm-lock.yaml"), "").unwrap();
-        assert_eq!(PackageManager::detect(dir.path()).unwrap(), PackageManager::Pnpm);
+        assert_eq!(
+            PackageManager::detect(dir.path()).unwrap(),
+            PackageManager::Pnpm
+        );
     }
 
     #[test]
@@ -200,14 +207,20 @@ mod tests {
         .unwrap();
         // packageManager field takes priority over lock files
         std::fs::write(dir.path().join("yarn.lock"), "").unwrap();
-        assert_eq!(PackageManager::detect(dir.path()).unwrap(), PackageManager::Pnpm);
+        assert_eq!(
+            PackageManager::detect(dir.path()).unwrap(),
+            PackageManager::Pnpm
+        );
     }
 
     #[test]
     fn test_detect_fallback_npm() {
         let dir = TempDir::new().unwrap();
         std::fs::write(dir.path().join("package.json"), "{}").unwrap();
-        assert_eq!(PackageManager::detect(dir.path()).unwrap(), PackageManager::Npm);
+        assert_eq!(
+            PackageManager::detect(dir.path()).unwrap(),
+            PackageManager::Npm
+        );
     }
 
     #[test]

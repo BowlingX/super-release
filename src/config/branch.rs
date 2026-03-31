@@ -129,10 +129,7 @@ mod tests {
             bc.resolve_prerelease("test-hello").as_deref(),
             Some("test-hello")
         );
-        assert_ne!(
-            bc.resolve_prerelease("test-hello").as_deref(),
-            Some("true")
-        );
+        assert_ne!(bc.resolve_prerelease("test-hello").as_deref(), Some("true"));
     }
 
     #[test]
