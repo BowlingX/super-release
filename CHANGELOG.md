@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.4.0] - 2026-03-31
+
+### 🚀 Features
+
+- Communicate version properly, adjusted docs, add `--show-next-version`
 ## [0.3.1] - 2026-03-31
 
 ### 🐛 Bug Fixes
