@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.9.0] - 2026-03-31
+
+### 🚀 Features
+
+- Simplified & optimized using `git log`, fixed config file handling
 ## [0.8.0] - 2026-03-31
 
 ### 🚀 Features
