@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.1] - 2026-03-31
+
+### 🐛 Bug Fixes
+
+- Moved package update to the right location, added info about package includes/excludes
 ## [0.5.0] - 2026-03-31
 
 ### 🚀 Features
