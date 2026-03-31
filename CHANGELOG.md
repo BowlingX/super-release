@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8.0] - 2026-03-31
+
+### 🚀 Features
+
+- Review & performance improvements
 ## [0.7.0] - 2026-03-31
 
 ### 🚀 Features
