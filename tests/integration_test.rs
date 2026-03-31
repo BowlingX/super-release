@@ -112,7 +112,6 @@ branches:
 plugins:
   - name: changelog
   - name: npm
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -263,7 +262,6 @@ branches:
 packages:
   - "@myorg/core"
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -426,7 +424,6 @@ fn test_custom_tag_format_package() {
         r#"
 tag_format_package: "{name}@{version}"
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -486,7 +483,6 @@ branches:
     prerelease: beta
 plugins:
   - name: changelog
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -533,7 +529,6 @@ branches:
   - name: beta
     prerelease: beta
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -580,7 +575,6 @@ branches:
   - name: "1.x"
     maintenance: true
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -627,7 +621,6 @@ branches:
   - name: "1.x"
     maintenance: true
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -682,7 +675,6 @@ branches:
   - name: "test-*"
     prerelease: true
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -737,7 +729,6 @@ branches:
   - name: "test-*"
     prerelease: true
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -798,7 +789,6 @@ branches:
   - name: "test-*"
     prerelease: true
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -836,7 +826,6 @@ branches:
   - name: "test-*"
     prerelease: true
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -884,7 +873,6 @@ branches:
   - name: "test-*"
     prerelease: true
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -951,7 +939,6 @@ branches:
   - name: "test-*"
     prerelease: true
 plugins:
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -1027,7 +1014,7 @@ fn test_behind_remote_blocks_release() {
     fs::write(local.join("index.js"), "// v1").unwrap();
     fs::write(
         local.join(".release.yaml"),
-        "branches: [main]\nplugins:\n  - name: git-tag\n",
+        "branches: [main]\nplugins:\n",
     )
     .unwrap();
 
@@ -1110,7 +1097,7 @@ fn test_behind_remote_skipped_in_dry_run() {
     fs::write(local.join("index.js"), "// v1").unwrap();
     fs::write(
         local.join(".release.yaml"),
-        "branches: [main]\nplugins:\n  - name: git-tag\n",
+        "branches: [main]\nplugins:\n",
     )
     .unwrap();
 
@@ -1149,4 +1136,312 @@ fn test_behind_remote_skipped_in_dry_run() {
         .arg(local.to_str().unwrap())
         .assert()
         .success();
+}
+
+#[test]
+fn test_global_dependency_triggers_all_packages() {
+    // When yarn.lock changes and is listed in `dependencies`,
+    // ALL packages should be affected by that commit.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "mono-root", "version": "1.0.0", "private": true}"#,
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("packages/core/src")).unwrap();
+    fs::write(
+        root.join("packages/core/package.json"),
+        r#"{"name": "@test/core", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/core/src/index.ts"), "// v1").unwrap();
+
+    fs::create_dir_all(root.join("packages/utils/src")).unwrap();
+    fs::write(
+        root.join("packages/utils/package.json"),
+        r#"{"name": "@test/utils", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/utils/src/index.ts"), "// v1").unwrap();
+
+    fs::write(root.join("yarn.lock"), "# initial").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches: [main]
+exclude: [mono-root]
+dependencies:
+  - yarn.lock
+plugins: []
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "@test/core/v1.0.0", "-m", "v1"]);
+    git(root, &["tag", "-a", "@test/utils/v1.0.0", "-m", "v1"]);
+
+    // Only change yarn.lock — no package source files touched
+    fs::write(root.join("yarn.lock"), "# updated deps").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: update dependencies"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Failed:\n{}", stdout);
+    // Both packages should be bumped even though only yarn.lock changed
+    assert!(
+        stdout.contains("@test/core"),
+        "core should be affected:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("@test/utils"),
+        "utils should be affected:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("1.1.0"),
+        "Should bump minor (feat commit):\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_global_dependency_not_triggered_without_config() {
+    // Without `dependencies` config, a yarn.lock-only change should NOT
+    // trigger releases for packages (the file maps to root which is excluded).
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "mono-root", "version": "1.0.0", "private": true}"#,
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("packages/core/src")).unwrap();
+    fs::write(
+        root.join("packages/core/package.json"),
+        r#"{"name": "@test/core", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/core/src/index.ts"), "// v1").unwrap();
+
+    fs::write(root.join("yarn.lock"), "# initial").unwrap();
+
+    // No `dependencies` config
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches: [main]
+exclude: [mono-root]
+plugins: []
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "@test/core/v1.0.0", "-m", "v1"]);
+
+    fs::write(root.join("yarn.lock"), "# updated").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: update deps"]);
+
+    super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No releases needed"));
+}
+
+#[test]
+fn test_global_dependency_glob_pattern() {
+    // Test that glob patterns work for dependencies (e.g. ".github/**")
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "mono-root", "version": "1.0.0", "private": true}"#,
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("packages/core/src")).unwrap();
+    fs::write(
+        root.join("packages/core/package.json"),
+        r#"{"name": "@test/core", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/core/src/index.ts"), "// v1").unwrap();
+
+    fs::create_dir_all(root.join(".github/workflows")).unwrap();
+    fs::write(root.join(".github/workflows/ci.yml"), "# ci").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches: [main]
+exclude: [mono-root]
+dependencies:
+  - ".github/**"
+plugins: []
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "@test/core/v1.0.0", "-m", "v1"]);
+
+    // Only change a workflow file
+    fs::write(root.join(".github/workflows/ci.yml"), "# updated").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: update CI pipeline"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Failed:\n{}", stdout);
+    assert!(
+        stdout.contains("@test/core"),
+        ".github/** should trigger core:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_ignore_files_no_release() {
+    // Commits that ONLY touch ignored files should not trigger releases.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+    fs::write(root.join("README.md"), "# readme").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches: [main]
+ignore:
+  - "README.md"
+  - "docs/**"
+  - "**/*.md"
+plugins: []
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    // Only change ignored files
+    fs::write(root.join("README.md"), "# updated readme").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: update readme"]);
+
+    super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No releases needed"));
+}
+
+#[test]
+fn test_ignore_mixed_with_real_changes() {
+    // A commit that touches both ignored and non-ignored files should
+    // still trigger a release (based on the non-ignored files).
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+    fs::write(root.join("README.md"), "# readme").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches: [main]
+ignore:
+  - "README.md"
+plugins: []
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    // Change both ignored and non-ignored files in one commit
+    fs::write(root.join("index.js"), "// v1.1").unwrap();
+    fs::write(root.join("README.md"), "# updated").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: new feature with docs"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Failed:\n{}", stdout);
+    assert!(
+        stdout.contains("1.1.0"),
+        "Should still release from non-ignored files:\n{}",
+        stdout
+    );
 }

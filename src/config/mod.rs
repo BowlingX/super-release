@@ -33,6 +33,54 @@ pub struct Config {
     /// Packages to exclude (glob patterns).
     #[serde(default)]
     pub exclude: Vec<String>,
+
+    /// Global file dependencies — glob patterns for files that, when changed,
+    /// affect ALL packages (e.g. "yarn.lock", "package.json", ".github/**").
+    #[serde(default)]
+    pub dependencies: Vec<String>,
+
+    /// Glob patterns for files to ignore. Commits that ONLY touch ignored files
+    /// will not trigger a release for any package.
+    #[serde(default)]
+    pub ignore: Vec<String>,
+
+    /// Git commit and tag behavior after plugins run.
+    #[serde(default)]
+    pub git: GitConfig,
+}
+
+/// Configuration for the core git commit + tag step.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitConfig {
+    /// Commit message template. Placeholders: {releases}, {summary}, {count}
+    #[serde(default = "default_commit_message")]
+    pub commit_message: String,
+
+    /// Whether to push the commit and tags to the remote after release.
+    #[serde(default)]
+    pub push: bool,
+
+    /// Git remote name (default: "origin").
+    #[serde(default = "default_remote")]
+    pub remote: String,
+}
+
+fn default_commit_message() -> String {
+    "chore(release): {releases} [skip ci]".into()
+}
+
+fn default_remote() -> String {
+    "origin".into()
+}
+
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self {
+            commit_message: default_commit_message(),
+            push: false,
+            remote: default_remote(),
+        }
+    }
 }
 
 /// Configuration for a single plugin.
@@ -40,6 +88,11 @@ pub struct Config {
 pub struct PluginConfig {
     /// Plugin name (e.g., "changelog", "npm", "git-tag")
     pub name: String,
+
+    /// Glob patterns to filter which packages this plugin operates on.
+    /// If empty, the plugin operates on all packages.
+    #[serde(default)]
+    pub packages: Vec<String>,
 
     /// Plugin-specific options
     #[serde(default)]
@@ -65,18 +118,12 @@ fn default_plugins() -> Vec<PluginConfig> {
     vec![
         PluginConfig {
             name: "changelog".into(),
+            packages: Vec::new(),
             options: serde_json::Value::Null,
         },
         PluginConfig {
             name: "npm".into(),
-            options: serde_json::Value::Null,
-        },
-        PluginConfig {
-            name: "git-commit".into(),
-            options: serde_json::Value::Null,
-        },
-        PluginConfig {
-            name: "git-tag".into(),
+            packages: Vec::new(),
             options: serde_json::Value::Null,
         },
     ]
@@ -91,6 +138,9 @@ impl Default for Config {
             plugins: default_plugins(),
             packages: None,
             exclude: Vec::new(),
+            dependencies: Vec::new(),
+            ignore: Vec::new(),
+            git: GitConfig::default(),
         }
     }
 }
@@ -189,7 +239,7 @@ mod tests {
         assert_eq!(config.branches[1].name(), "master");
         assert_eq!(config.tag_format, "v{version}");
         assert_eq!(config.tag_format_package, "{name}/v{version}");
-        assert_eq!(config.plugins.len(), 4);
+        assert_eq!(config.plugins.len(), 2);
     }
 
     #[test]

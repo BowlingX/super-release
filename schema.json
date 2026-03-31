@@ -47,18 +47,34 @@
       "items": { "type": "string" },
       "examples": [["my-monorepo-root", "@acme/internal-*"]]
     },
+    "ignore": {
+      "description": "Glob patterns for files to ignore. Commits that only touch ignored files will not trigger a release.",
+      "type": "array",
+      "default": [],
+      "items": { "type": "string" },
+      "examples": [["README.md", "docs/**", ".prettierrc", "**/*.md"]]
+    },
+    "dependencies": {
+      "description": "Global file dependency patterns. When a commit changes any matching file, ALL packages are considered affected. Useful for lock files, shared configs, etc.",
+      "type": "array",
+      "default": [],
+      "items": { "type": "string" },
+      "examples": [["yarn.lock", "pnpm-lock.yaml", "package.json", ".github/**"]]
+    },
     "plugins": {
       "description": "Ordered list of plugins to execute",
       "type": "array",
       "default": [
         { "name": "changelog" },
-        { "name": "npm" },
-        { "name": "git-commit" },
-        { "name": "git-tag" }
+        { "name": "npm" }
       ],
       "items": {
         "$ref": "#/$defs/pluginConfig"
       }
+    },
+    "git": {
+      "description": "Git commit and tag behavior after plugins run",
+      "$ref": "#/$defs/gitConfig"
     }
   },
   "$defs": {
@@ -93,18 +109,16 @@
       "properties": {
         "name": {
           "type": "string",
-          "enum": ["changelog", "npm", "exec", "git-commit", "git-tag"],
+          "enum": ["changelog", "npm", "exec"],
           "description": "Plugin name"
         },
+        "packages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Glob patterns to filter which packages this plugin operates on. Empty = all."
+        },
         "options": {
-          "description": "Plugin-specific options",
-          "oneOf": [
-            { "$ref": "#/$defs/changelogOptions" },
-            { "$ref": "#/$defs/npmOptions" },
-            { "$ref": "#/$defs/execOptions" },
-            { "$ref": "#/$defs/gitCommitOptions" },
-            { "$ref": "#/$defs/gitTagOptions" }
-          ]
+          "description": "Plugin-specific options"
         }
       },
       "allOf": [
@@ -119,16 +133,29 @@
         {
           "if": { "properties": { "name": { "const": "exec" } } },
           "then": { "properties": { "options": { "$ref": "#/$defs/execOptions" } } }
-        },
-        {
-          "if": { "properties": { "name": { "const": "git-commit" } } },
-          "then": { "properties": { "options": { "$ref": "#/$defs/gitCommitOptions" } } }
-        },
-        {
-          "if": { "properties": { "name": { "const": "git-tag" } } },
-          "then": { "properties": { "options": { "$ref": "#/$defs/gitTagOptions" } } }
         }
       ]
+    },
+    "gitConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "commit_message": {
+          "type": "string",
+          "default": "chore(release): {releases} [skip ci]",
+          "description": "Commit message template. Placeholders: {releases}, {summary}, {count}"
+        },
+        "push": {
+          "type": "boolean",
+          "default": false,
+          "description": "Push commit and tags to remote after release"
+        },
+        "remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "Git remote name"
+        }
+      }
     },
     "changelogOptions": {
       "type": "object",
@@ -194,53 +221,11 @@
           "type": "string",
           "description": "Shell command for publish phase. Placeholders: {version}, {name}, {channel}"
         },
-        "packages": {
+        "files": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Glob patterns to filter which packages this exec applies to. Empty = all"
-        }
-      }
-    },
-    "gitCommitOptions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "message": {
-          "type": "string",
-          "default": "chore(release): {releases} [skip ci]",
-          "description": "Commit message template. Placeholders: {releases}, {summary}, {count}"
-        },
-        "push": {
-          "type": "boolean",
-          "default": false,
-          "description": "Push to remote after committing"
-        },
-        "remote": {
-          "type": "string",
-          "default": "origin",
-          "description": "Git remote name"
-        },
-        "paths": {
-          "type": "array",
-          "items": { "type": "string" },
-          "default": ["."],
-          "description": "Paths to stage before committing"
-        }
-      }
-    },
-    "gitTagOptions": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "push": {
-          "type": "boolean",
-          "default": false,
-          "description": "Push tags to remote after creation"
-        },
-        "remote": {
-          "type": "string",
-          "default": "origin",
-          "description": "Git remote name"
+          "description": "Files to include in the git commit. Supports {version} and {name} placeholders.",
+          "examples": [["Cargo.toml", "Cargo.lock"]]
         }
       }
     }

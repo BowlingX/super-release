@@ -82,7 +82,6 @@ plugins:
   - name: changelog
   - name: npm
     {}
-  - name: git-tag
 "#,
             extra
         ),

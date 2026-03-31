@@ -79,13 +79,49 @@ pub fn determine_releases(
     let all_commits = git::get_commits_since(repo, repo_path, oldest_tag)?;
 
     // 4. Precompute file→package name mapping once.
+    //    If any file in a commit matches a global dependency pattern,
+    //    that commit affects ALL packages.
+    let has_ignore = !config.ignore.is_empty();
+    let all_pkg_names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
     let commit_packages: Vec<Vec<&str>> = all_commits
         .iter()
         .map(|c| {
-            c.files_changed
-                .iter()
-                .filter_map(|f| file_to_package(f, packages).map(|p| p.name.as_str()))
-                .collect()
+            // Filter out ignored files first
+            let relevant_files: Vec<&str> = if has_ignore {
+                c.files_changed
+                    .iter()
+                    .filter(|f| {
+                        !config
+                            .ignore
+                            .iter()
+                            .any(|pat| crate::config::glob_match(pat, f))
+                    })
+                    .map(|f| f.as_str())
+                    .collect()
+            } else {
+                c.files_changed.iter().map(|f| f.as_str()).collect()
+            };
+
+            if relevant_files.is_empty() {
+                return Vec::new();
+            }
+
+            let touches_global_dep = !config.dependencies.is_empty()
+                && relevant_files.iter().any(|f| {
+                    config
+                        .dependencies
+                        .iter()
+                        .any(|pat| crate::config::glob_match(pat, f))
+                });
+
+            if touches_global_dep {
+                all_pkg_names.clone()
+            } else {
+                relevant_files
+                    .iter()
+                    .filter_map(|f| file_to_package(f, packages).map(|p| p.name.as_str()))
+                    .collect()
+            }
         })
         .collect();
 

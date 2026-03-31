@@ -3,7 +3,7 @@ use console::style;
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use git_cliff_core::changelog::Changelog;
@@ -62,7 +62,7 @@ impl Plugin for ChangelogPlugin {
         config: &PluginConfig,
         packages: &[Package],
         releases: &[PackageRelease],
-    ) -> Result<()> {
+    ) -> Result<Vec<PathBuf>> {
         let opts: ChangelogOptions = parse_options(config)?;
 
         // Generate changelogs per package in parallel
@@ -113,7 +113,18 @@ impl Plugin for ChangelogPlugin {
             update_changelog(path, notes)?;
             println!("  [changelog] Updated {}", path.display());
         }
-        Ok(())
+
+        let modified: Vec<PathBuf> = results
+            .iter()
+            .map(|(_, p, _)| {
+                PathBuf::from(p)
+                    .strip_prefix(ctx.repo_root)
+                    .unwrap_or(&PathBuf::from(p))
+                    .to_path_buf()
+            })
+            .collect();
+
+        Ok(modified)
     }
 }
 

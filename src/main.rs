@@ -265,11 +265,11 @@ fn main() -> Result<()> {
 
     let plugin_ctx = plugin::PluginContext {
         repo_root: &repo_root,
-        repo: &repo,
         dry_run: cli.dry_run,
-        config: &cfg,
         branch: &branch_ctx,
     };
+
+    let mut modified_files: Vec<std::path::PathBuf> = Vec::new();
 
     for plugin_cfg in &cfg.plugins {
         let p = match plugin::create_plugin(&plugin_cfg.name) {
@@ -290,12 +290,45 @@ fn main() -> Result<()> {
             style(p.name()).bold()
         );
 
+        let (filtered_packages, filtered_releases) = if plugin_cfg.packages.is_empty() {
+            (packages.clone(), releases.clone())
+        } else {
+            let fp: Vec<_> = packages
+                .iter()
+                .filter(|p| {
+                    plugin_cfg
+                        .packages
+                        .iter()
+                        .any(|pat| config::glob_match(pat, &p.name))
+                })
+                .cloned()
+                .collect();
+            let fr: Vec<_> = releases
+                .iter()
+                .filter(|r| {
+                    plugin_cfg
+                        .packages
+                        .iter()
+                        .any(|pat| config::glob_match(pat, &r.package_name))
+                })
+                .cloned()
+                .collect();
+            (fp, fr)
+        };
+
         p.verify(&plugin_ctx, plugin_cfg)?;
-        p.prepare(&plugin_ctx, plugin_cfg, &packages, &releases)?;
-        p.publish(&plugin_ctx, plugin_cfg, &packages, &releases)?;
+        modified_files.extend(p.prepare(&plugin_ctx, plugin_cfg, &filtered_packages, &filtered_releases)?);
+        modified_files.extend(p.publish(&plugin_ctx, plugin_cfg, &filtered_packages, &filtered_releases)?);
 
         printfl!();
     }
+
+    // Core: git commit + tag
+    printfl!(
+        "{} Finalizing git commit and tags",
+        style(">>").bold().blue()
+    );
+    finalize_git(&repo_root, &repo, &cfg, &releases, &modified_files, cli.dry_run)?;
 
     if cli.dry_run {
         printfl!(
@@ -306,6 +339,165 @@ fn main() -> Result<()> {
         );
     } else {
         printfl!("{}", style("Release complete!").green().bold());
+    }
+
+    Ok(())
+}
+
+/// Core git finalize: stage modified files, commit, tag, optionally push.
+fn finalize_git(
+    repo_root: &std::path::Path,
+    repo: &git2::Repository,
+    cfg: &config::Config,
+    releases: &[version::PackageRelease],
+    modified_files: &[std::path::PathBuf],
+    dry_run: bool,
+) -> Result<()> {
+    use std::process::Command;
+
+    let release_list: String = releases
+        .iter()
+        .map(|r| format!("{}@{}", r.package_name, r.next_version))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let summary: String = releases
+        .iter()
+        .map(|r| {
+            format!(
+                "  - {} {} -> {}",
+                r.package_name, r.current_version, r.next_version
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let message = cfg
+        .git
+        .commit_message
+        .replace("{releases}", &release_list)
+        .replace("{summary}", &summary)
+        .replace("{count}", &releases.len().to_string());
+
+    if dry_run {
+        printfl!("  [git] Would stage {} file(s)", modified_files.len());
+        for f in modified_files {
+            printfl!("    {}", style(f.display()).dim());
+        }
+        printfl!("  [git] Would commit: {}", message);
+        for release in releases {
+            let tag = cfg.format_tag(
+                &release.package_name,
+                &release.next_version,
+                release.is_root,
+            );
+            printfl!("  [git] Would create tag: {}", tag);
+        }
+        if cfg.git.push {
+            printfl!("  [git] Would push to {}", cfg.git.remote);
+        }
+        return Ok(());
+    }
+
+    // Stage only the files that plugins modified
+    if !modified_files.is_empty() {
+        let mut add_cmd = Command::new("git");
+        add_cmd.arg("add").current_dir(repo_root);
+        for f in modified_files {
+            add_cmd.arg(f);
+        }
+        // Also stage any untracked changes from exec plugin (which can't report files)
+        // by adding the whole repo — but only if exec was used
+        let output = add_cmd.output().context("Failed to run git add")?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git add failed: {}", stderr);
+        }
+    }
+
+    // Also stage any changes from exec plugin (it returns empty file lists)
+    // Check if there are unstaged changes beyond what we tracked
+    let has_unstaged = !Command::new("git")
+        .args(["diff", "--quiet"])
+        .current_dir(repo_root)
+        .status()?
+        .success();
+
+    if has_unstaged {
+        let output = Command::new("git")
+            .args(["add", "-u"])
+            .current_dir(repo_root)
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git add -u failed: {}", stderr);
+        }
+    }
+
+    // Check if there's anything to commit
+    let has_staged = !Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(repo_root)
+        .status()?
+        .success();
+
+    if has_staged {
+        let output = Command::new("git")
+            .args(["commit", "-m", &message])
+            .current_dir(repo_root)
+            .output()
+            .context("Failed to run git commit")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git commit failed: {}", stderr);
+        }
+        printfl!("  [git] Committed: {}", message);
+    } else {
+        printfl!("  [git] Nothing to commit");
+    }
+
+    // Create tags
+    let mut created_tags: Vec<String> = Vec::new();
+    for release in releases {
+        let tag_name = cfg.format_tag(
+            &release.package_name,
+            &release.next_version,
+            release.is_root,
+        );
+
+        if git::tag_to_oid(repo, &tag_name)?.is_some() {
+            printfl!("  [git] Tag already exists: {}, skipping", tag_name);
+            continue;
+        }
+
+        let tag_message = format!(
+            "Release {} v{}",
+            release.package_name, release.next_version
+        );
+        git::create_tag(repo, &tag_name, &tag_message)?;
+        printfl!("  [git] Created tag: {}", tag_name);
+        created_tags.push(tag_name);
+    }
+
+    // Push
+    if cfg.git.push && (!created_tags.is_empty() || has_staged) {
+        printfl!("  [git] Pushing to {} ...", cfg.git.remote);
+        let mut push_cmd = Command::new("git");
+        push_cmd
+            .arg("push")
+            .arg(&cfg.git.remote)
+            .arg("HEAD")
+            .current_dir(repo_root);
+        for tag in &created_tags {
+            push_cmd.arg(tag);
+        }
+        let output = push_cmd.output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("git push failed: {}", stderr);
+        }
+        printfl!("  [git] Pushed");
     }
 
     Ok(())

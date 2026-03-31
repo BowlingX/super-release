@@ -42,8 +42,6 @@ branches:
   - main
 plugins:
   - name: changelog
-  - name: git-commit
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -93,8 +91,6 @@ exclude:
   - mono-root
 plugins:
   - name: changelog
-  - name: git-commit
-  - name: git-tag
 "#,
     )
     .unwrap();
@@ -164,6 +160,57 @@ fn test_full_release_single_package() {
 // ──────────────────────────────────────────────────────────────
 // Idempotent rerun — running twice produces the same result
 // ──────────────────────────────────────────────────────────────
+
+#[test]
+fn test_only_plugin_files_are_committed() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_single_package(root);
+
+    // Create an untracked file that should NOT be committed
+    fs::write(root.join("untracked.txt"), "should not be committed").unwrap();
+
+    let output = super_release_bin()
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Failed:\n{}", stdout);
+
+    // The release commit should exist
+    let log = process::Command::new("git")
+        .args(["log", "--format=%s", "-1"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let msg = String::from_utf8_lossy(&log.stdout);
+    assert!(msg.contains("chore(release)"), "Should have release commit:\n{}", msg);
+
+    // The CHANGELOG.md should be in the commit
+    let show = process::Command::new("git")
+        .args(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let files = String::from_utf8_lossy(&show.stdout);
+    assert!(
+        files.contains("CHANGELOG.md"),
+        "CHANGELOG.md should be in the commit:\n{}",
+        files
+    );
+
+    // The untracked file should NOT be in the commit
+    assert!(
+        !files.contains("untracked.txt"),
+        "untracked.txt should NOT be in the commit:\n{}",
+        files
+    );
+
+    // The untracked file should still exist on disk
+    assert!(root.join("untracked.txt").exists());
+}
 
 #[test]
 fn test_idempotent_rerun_single_package() {
@@ -271,14 +318,12 @@ fn test_git_tag_skips_existing() {
     .unwrap();
     fs::write(root.join("index.js"), "// v1").unwrap();
 
-    // Only git-tag plugin
     fs::write(
         root.join(".release.yaml"),
         r#"
 branches:
   - main
-plugins:
-  - name: git-tag
+plugins: []
 "#,
     )
     .unwrap();
@@ -342,14 +387,13 @@ fn test_git_commit_handles_nothing_to_commit() {
     .unwrap();
     fs::write(root.join("index.js"), "// v1").unwrap();
 
-    // Only git-commit plugin (no changelog/npm to generate changes)
+    // No plugins — core git will still try to commit/tag but no files changed
     fs::write(
         root.join(".release.yaml"),
         r#"
 branches:
   - main
-plugins:
-  - name: git-commit
+plugins: []
 "#,
     )
     .unwrap();
@@ -362,7 +406,7 @@ plugins:
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "feat: new feature"]);
 
-    // git-commit will try to stage and commit, but no files were changed by plugins
+    // Core git will find nothing to commit since no plugins modified files
     let output = super_release_bin()
         .arg("-C")
         .arg(root.to_str().unwrap())

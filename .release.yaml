@@ -15,7 +15,10 @@ plugins:
   - name: exec
     options:
       prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml && cargo update super-release"
-  - name: git-commit
-    options:
-      message: "chore(release): {releases} [skip ci]"
-  - name: git-tag
+      files:
+        - Cargo.toml
+        - Cargo.lock
+
+git:
+  commit_message: "chore(release): {releases} [skip ci]"
+  push: false

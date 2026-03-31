@@ -158,8 +158,8 @@ branches: [main]
 exclude: [mono-root]
 plugins:
   - name: exec
+    packages: ["@test/core"]
     options:
-      packages: ["@test/core"]
       prepare_cmd: "echo {name}={version} >> releases.txt"
 "#,
     )
@@ -198,12 +198,12 @@ branches: [main]
 exclude: [mono-root]
 plugins:
   - name: exec
+    packages: ["@test/core"]
     options:
-      packages: ["@test/core"]
       prepare_cmd: "echo core={version} >> output.txt"
   - name: exec
+    packages: ["@test/cli"]
     options:
-      packages: ["@test/cli"]
       prepare_cmd: "echo cli={version} >> output.txt"
 "#,
     )
@@ -234,8 +234,8 @@ branches: [main]
 exclude: [mono-root]
 plugins:
   - name: exec
+    packages: ["@test/*"]
     options:
-      packages: ["@test/*"]
       prepare_cmd: "echo {name} >> matched.txt"
 "#,
     )

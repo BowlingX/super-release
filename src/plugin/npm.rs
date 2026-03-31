@@ -75,10 +75,11 @@ impl Plugin for NpmPlugin {
         config: &PluginConfig,
         packages: &[Package],
         releases: &[PackageRelease],
-    ) -> Result<()> {
+    ) -> Result<Vec<std::path::PathBuf>> {
         let opts: NpmOptions = parse_options(config)?;
         let pm = resolve_pm(ctx, &opts)?;
         let order = topological_sort(packages)?;
+        let mut modified = Vec::new();
 
         for pkg_name in &order {
             if let Some(release) = releases.iter().find(|r| &r.package_name == pkg_name) {
@@ -93,20 +94,20 @@ impl Plugin for NpmPlugin {
                         release.current_version,
                         release.next_version
                     );
-                    continue;
+                } else {
+                    update_package_version(&manifest_path, &release.next_version)?;
+                    println!(
+                        "  [{}] Updated {} to {}",
+                        pm,
+                        pkg.manifest_path.display(),
+                        release.next_version
+                    );
                 }
-
-                update_package_version(&manifest_path, &release.next_version)?;
-                println!(
-                    "  [{}] Updated {} to {}",
-                    pm,
-                    pkg.manifest_path.display(),
-                    release.next_version
-                );
+                modified.push(pkg.manifest_path.clone());
             }
         }
 
-        Ok(())
+        Ok(modified)
     }
 
     fn publish(
@@ -115,7 +116,7 @@ impl Plugin for NpmPlugin {
         config: &PluginConfig,
         packages: &[Package],
         releases: &[PackageRelease],
-    ) -> Result<()> {
+    ) -> Result<Vec<std::path::PathBuf>> {
         let opts: NpmOptions = parse_options(config)?;
         let pm = resolve_pm(ctx, &opts)?;
         let dist_tag: Option<&str> = opts.tag.as_deref().or(ctx.branch.prerelease.as_deref());
@@ -161,7 +162,7 @@ impl Plugin for NpmPlugin {
         }
 
         if errors.is_empty() {
-            Ok(())
+            Ok(Vec::new())
         } else {
             anyhow::bail!(
                 "{} package(s) failed to publish:\n  {}",
