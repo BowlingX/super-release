@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.0] - 2026-03-31
+
+### 🚀 Features
+
+- Cleanup, add global ignore/dependency pattern, make git integration global
+
+### ⚙️ Miscellaneous Tasks
+
+- Docs
 ## [0.4.0] - 2026-03-31
 
 ### 🚀 Features
