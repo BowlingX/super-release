@@ -98,7 +98,7 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          path: .tmp
+          path: artifacts
 
       - name: Extract super-release binary
         run: |
