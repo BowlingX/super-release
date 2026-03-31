@@ -71,11 +71,18 @@ pub fn topological_sort(packages: &[Package]) -> Result<Vec<String>> {
 /// Returns the most specific (longest path) matching package.
 ///
 /// For best performance, pass packages pre-sorted by `sort_by_path_depth`.
+/// Expects packages sorted by `sort_by_path_depth` (deepest first).
 pub fn file_to_package<'a>(file_path: &str, packages: &'a [Package]) -> Option<&'a Package> {
+    debug_assert!(
+        packages
+            .windows(2)
+            .all(|w| w[0].path.components().count() >= w[1].path.components().count()),
+        "packages must be sorted by path depth descending (call sort_by_path_depth first)"
+    );
+
     let file = Path::new(file_path);
 
-    // Packages should be sorted deepest-first by sort_by_path_depth,
-    // so the first prefix match is the most specific.
+    // Packages are sorted deepest-first, so the first prefix match is the most specific.
     for pkg in packages {
         if !pkg.path.as_os_str().is_empty() && file.starts_with(&pkg.path) {
             return Some(pkg);
@@ -122,11 +129,12 @@ mod tests {
 
     #[test]
     fn test_file_to_package() {
-        let packages = vec![
+        let mut packages = vec![
             make_pkg("root", "", &[]),
             make_pkg("@myorg/core", "packages/core", &[]),
             make_pkg("@myorg/utils", "packages/utils", &[]),
         ];
+        sort_by_path_depth(&mut packages);
 
         assert_eq!(
             file_to_package("packages/core/src/index.ts", &packages)
@@ -142,6 +150,36 @@ mod tests {
         );
         assert_eq!(
             file_to_package("README.md", &packages).unwrap().name,
+            "root"
+        );
+    }
+
+    #[test]
+    fn test_file_to_package_nested_paths() {
+        let mut packages = vec![
+            make_pkg("root", "", &[]),
+            make_pkg("@myorg/core", "packages/core", &[]),
+            make_pkg("@myorg/core-sub", "packages/core/sub", &[]),
+        ];
+        sort_by_path_depth(&mut packages);
+
+        // Deepest match wins
+        assert_eq!(
+            file_to_package("packages/core/sub/index.ts", &packages)
+                .unwrap()
+                .name,
+            "@myorg/core-sub"
+        );
+        // Parent package still works for its own files
+        assert_eq!(
+            file_to_package("packages/core/index.ts", &packages)
+                .unwrap()
+                .name,
+            "@myorg/core"
+        );
+        // Root fallback
+        assert_eq!(
+            file_to_package("tsconfig.json", &packages).unwrap().name,
             "root"
         );
     }

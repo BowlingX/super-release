@@ -133,16 +133,21 @@ pub fn determine_releases(
         }
     }
 
-    // 5. Process each package in parallel using the inverted index.
+    // 5. Build OID→index map for O(1) cutoff lookups.
+    let oid_to_idx: HashMap<git2::Oid, usize> = all_commits
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| c.oid.map(|oid| (oid, i)))
+        .collect();
+
+    // 6. Process each package in parallel using the inverted index.
     let releases: Vec<Option<PackageRelease>> = packages
         .par_iter()
         .zip(tag_infos.par_iter())
         .map(|(pkg, tag_info)| {
-            // Find the cutoff index: the position in all_commits of the tagged commit.
-            // All commits before this index (lower index = newer) are since the tag.
             let cutoff_idx = tag_info
                 .cutoff_oid
-                .and_then(|cutoff| all_commits.iter().position(|c| c.oid == Some(cutoff)));
+                .and_then(|cutoff| oid_to_idx.get(&cutoff).copied());
 
             let pkg_commits: Vec<ConventionalCommit> = pkg_commit_indices
                 .get(pkg.name.as_str())
