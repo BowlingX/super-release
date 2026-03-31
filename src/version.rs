@@ -75,7 +75,7 @@ pub fn determine_releases(
     };
 
     // 3. Walk commits only from HEAD to the oldest tag boundary.
-    let all_commits = git::get_commits_since(repo, repo_path, oldest_tag)?;
+    let mut all_commits = git::get_commits_since(repo, repo_path, oldest_tag)?;
 
     // 4. Precompute file→package name mapping once.
     //    If any file in a commit matches a global dependency pattern,
@@ -131,6 +131,11 @@ pub fn determine_releases(
                 }
             }
         }
+    }
+
+    // Free file lists now that the inverted index is built — they're no longer needed.
+    for c in &mut all_commits {
+        c.files_changed = Vec::new();
     }
 
     // 5. Build OID→index map for O(1) cutoff lookups.

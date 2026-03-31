@@ -145,8 +145,17 @@ impl Default for Config {
     }
 }
 
-/// Load configuration from a .release.yaml file, falling back to defaults.
-pub fn load_config(repo_root: &Path) -> Result<Config> {
+/// Load configuration. If `path` is a file, load it directly.
+/// If it's a directory, search for known config filenames.
+pub fn load_config(path: &Path) -> Result<Config> {
+    if path.is_file() {
+        let content =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let config: Config = serde_saphyr::from_str(&content)
+            .with_context(|| format!("parsing config file: {}", path.display()))?;
+        return Ok(config);
+    }
+
     let candidates = [
         ".release.yaml",
         ".release.yml",
@@ -155,15 +164,15 @@ pub fn load_config(repo_root: &Path) -> Result<Config> {
     ];
 
     for candidate in &candidates {
-        let path = repo_root.join(candidate);
-        match std::fs::read_to_string(&path) {
+        let file = path.join(candidate);
+        match std::fs::read_to_string(&file) {
             Ok(content) => {
                 let config: Config = serde_saphyr::from_str(&content)
-                    .with_context(|| format!("parsing config file: {}", path.display()))?;
+                    .with_context(|| format!("parsing config file: {}", file.display()))?;
                 return Ok(config);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(anyhow::anyhow!("reading {}: {}", path.display(), e)),
+            Err(e) => return Err(anyhow::anyhow!("reading {}: {}", file.display(), e)),
         }
     }
 

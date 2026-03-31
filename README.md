@@ -56,8 +56,6 @@ super-release --show-next-version
 # Get the next version for a specific package in a monorepo
 super-release --show-next-version --package @acme/core
 
-# Use 4 threads for commit analysis
-super-release -j 4
 ```
 
 ## CLI Reference
@@ -72,7 +70,6 @@ Options:
       --show-next-version      Print the next version and exit
   -p, --package <PACKAGE>      Filter to a specific package (for --show-next-version)
   -v, --verbose                Verbose output
-  -j, --jobs <JOBS>            Parallel jobs for commit analysis [default: 50% of CPUs]
   -h, --help                   Print help
   -V, --version                Print version
 ```
@@ -322,7 +319,6 @@ to a package based on which files it changed.
 
 ## Performance
 
-- **Parallel diff computation**: commit diffs computed across multiple threads
 - **Tag-bounded history walk**: only walks commits since the oldest package tag
 - **Single-pass commit collection**: commits fetched once, partitioned per package
 - **Reachable-only tags**: single revwalk to check tag reachability, stops early

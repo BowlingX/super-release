@@ -1,11 +1,9 @@
-use anyhow::Result;
-use git2::{DiffOptions, Repository, Sort};
+use anyhow::{Context, Result};
+use git2::Repository;
 use indicatif::{ProgressBar, ProgressStyle};
-use rayon::prelude::*;
 use semver::Version;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::commit::{ConventionalCommit, parse_conventional_commit};
 use crate::config::{BranchContext, Config};
@@ -44,22 +42,17 @@ impl TagIndex {
             pkg_name: String,
             version: Version,
         }
-        let mut candidates: Vec<Candidate> = Vec::new();
-        let mut pending_oids: HashSet<git2::Oid> = HashSet::new();
-        let mut oid_cache: HashMap<String, Option<git2::Oid>> = HashMap::new();
+        // First pass: find tags that match any package regex + branch filter.
+        // Defer OID resolution until we know the tag is relevant.
+        struct PreCandidate {
+            tag_name: String,
+            pkg_name: String,
+            version: Version,
+        }
+        let mut pre_candidates: Vec<PreCandidate> = Vec::new();
+        let mut matched_tag_names: HashSet<String> = HashSet::new();
 
         for tag_name in tag_names.iter().flatten() {
-            // Resolve OID once per tag name, not per package
-            let tag_oid = match oid_cache.get(tag_name) {
-                Some(cached) => *cached,
-                None => {
-                    let oid = tag_to_oid(repo, tag_name)?;
-                    oid_cache.insert(tag_name.to_string(), oid);
-                    oid
-                }
-            };
-            let Some(tag_oid) = tag_oid else { continue };
-
             for (pkg_name, _is_root, tag_re) in &pkg_regexes {
                 let Some(v) = extract_version_from_tag(tag_name, tag_re) else {
                     continue;
@@ -67,12 +60,32 @@ impl TagIndex {
                 if !version_matches_branch(&v, branch_ctx) {
                     continue;
                 }
-                pending_oids.insert(tag_oid);
-                candidates.push(Candidate {
+                matched_tag_names.insert(tag_name.to_string());
+                pre_candidates.push(PreCandidate {
                     tag_name: tag_name.to_string(),
-                    tag_oid,
                     pkg_name: pkg_name.to_string(),
                     version: v,
+                });
+            }
+        }
+
+        // Second pass: resolve OIDs only for matched tags.
+        let mut oid_cache: HashMap<String, Option<git2::Oid>> = HashMap::new();
+        for name in &matched_tag_names {
+            oid_cache.insert(name.clone(), tag_to_oid(repo, name)?);
+        }
+
+        let mut candidates: Vec<Candidate> = Vec::new();
+        let mut pending_oids: HashSet<git2::Oid> = HashSet::new();
+
+        for pc in pre_candidates {
+            if let Some(&Some(tag_oid)) = oid_cache.get(&pc.tag_name) {
+                pending_oids.insert(tag_oid);
+                candidates.push(Candidate {
+                    tag_name: pc.tag_name,
+                    tag_oid,
+                    pkg_name: pc.pkg_name,
+                    version: pc.version,
                 });
             }
         }
@@ -137,136 +150,107 @@ fn version_matches_branch(v: &Version, branch_ctx: &BranchContext) -> bool {
     }
 }
 
-struct RawCommit {
-    oid: git2::Oid,
-    parsed: ConventionalCommit,
-}
-
 /// Get all commits from HEAD, optionally stopping at a tag boundary.
+/// Uses `git log --name-only` for fast file-change detection (leverages git's pack caching).
 pub fn get_commits_since(
-    repo: &Repository,
+    _repo: &Repository,
     repo_path: &Path,
     since_tag: Option<&str>,
 ) -> Result<Vec<ConventionalCommit>> {
-    let mut revwalk = repo.revwalk()?;
-    revwalk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)?;
-    revwalk.push_head()?;
+    use std::io::BufReader;
+    use std::process::{Command, Stdio};
 
-    if let Some(tag_name) = since_tag {
-        let tag_ref = repo
-            .resolve_reference_from_short_name(tag_name)
-            .or_else(|_| repo.find_reference(&format!("refs/tags/{}", tag_name)))?;
-        let target = tag_ref.peel_to_commit()?;
-        revwalk.hide(target.id())?;
+    // Format: each commit is separated by \x1e (record separator).
+    // Within each commit: HASH\tFULL_MESSAGE\x1e\nFILE1\nFILE2\n...
+    // The --name-only output follows after the format string.
+    let mut cmd = Command::new("git");
+    cmd.args([
+        "log",
+        "--format=%x1e%H%x09%B",
+        "--name-only",
+        "--topo-order",
+    ])
+    .current_dir(repo_path)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+
+    if let Some(tag) = since_tag {
+        cmd.arg(format!("{}..HEAD", tag));
     }
 
-    let mut raw_commits = Vec::new();
-    for oid in revwalk {
-        let oid = oid?;
-        let commit = repo.find_commit(oid)?;
-        let message = commit.message().unwrap_or("").to_string();
-        let hash8 = oid.to_string()[..8].to_string();
+    let mut child = cmd.spawn().context("Failed to run git log")?;
 
-        if let Some(mut parsed) = parse_conventional_commit(&hash8, &message) {
-            parsed.oid = Some(oid);
-            raw_commits.push(RawCommit { oid, parsed });
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .template("  {spinner:.cyan} Reading commits...")
+            .unwrap(),
+    );
+    spinner.enable_steady_tick(std::time::Duration::from_millis(80));
+
+    // Read all output at once, then split by record separator
+    let mut raw_output = String::new();
+    if let Some(stdout) = child.stdout.take() {
+        use std::io::Read;
+        let mut reader = BufReader::new(stdout);
+        reader.read_to_string(&mut raw_output)?;
+    }
+    child.wait()?;
+
+    let mut commits = Vec::new();
+
+    for record in raw_output.split('\x1e') {
+        let record = record.trim();
+        if record.is_empty() {
+            continue;
+        }
+
+        // Split into lines: first line is "HASH\tMESSAGE", then blank line, then file names
+        let mut lines = record.lines();
+        let Some(header) = lines.next() else {
+            continue;
+        };
+        let Some((hash, first_msg_line)) = header.split_once('\t') else {
+            continue;
+        };
+
+        // Collect message lines (until we hit a blank line followed by file names)
+        let mut message_lines = vec![first_msg_line.to_string()];
+        let mut files = Vec::new();
+        let mut past_message = false;
+
+        for line in lines {
+            if past_message {
+                if !line.is_empty() {
+                    files.push(line.to_string());
+                }
+            } else if line.is_empty() && message_lines.last().map(|l| l.is_empty()).unwrap_or(false)
+            {
+                // Double blank line or blank after message = start of file list
+                past_message = true;
+            } else {
+                message_lines.push(line.to_string());
+            }
+        }
+
+        // Trim trailing empty lines from message
+        while message_lines.last().map(|l| l.is_empty()).unwrap_or(false) {
+            message_lines.pop();
+        }
+
+        let full_message = message_lines.join("\n");
+        let hash8 = &hash[..8.min(hash.len())];
+
+        if let Some(mut parsed) = parse_conventional_commit(hash8, &full_message) {
+            parsed.oid = git2::Oid::from_str(hash).ok();
+            parsed.files_changed = files;
+            commits.push(parsed);
+            spinner.tick();
         }
     }
 
-    if raw_commits.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let total = raw_commits.len();
-    let pb = ProgressBar::new(total as u64);
-    pb.set_style(
-        ProgressStyle::default_bar()
-            .template("  {spinner:.cyan} Analyzing {pos}/{len} commits [{bar:30.cyan/dim}] {eta}")?
-            .progress_chars("━╸─"),
-    );
-
-    let results = if total < 50 {
-        raw_commits
-            .into_iter()
-            .map(|rc| {
-                let r = build_commit(repo, rc);
-                pb.inc(1);
-                r
-            })
-            .collect::<Result<Vec<_>>>()?
-    } else {
-        parallel_build_commits(raw_commits, repo_path, &pb)?
-    };
-
-    pb.finish_and_clear();
-    Ok(results)
-}
-
-fn parallel_build_commits(
-    raw_commits: Vec<RawCommit>,
-    repo_path: &Path,
-    pb: &ProgressBar,
-) -> Result<Vec<ConventionalCommit>> {
-    let repo_path = repo_path.to_path_buf();
-
-    thread_local! {
-        static THREAD_REPO: RefCell<Option<(PathBuf, Repository)>> = const { RefCell::new(None) };
-    }
-
-    raw_commits
-        .into_par_iter()
-        .map(|rc| {
-            let result = THREAD_REPO.with(|cell| {
-                let mut slot = cell.borrow_mut();
-                let repo = match slot.as_ref() {
-                    Some((path, repo)) if path == &repo_path => repo,
-                    _ => {
-                        let new_repo = Repository::open(&repo_path)
-                            .map_err(|e| anyhow::anyhow!("Failed to open repo in thread: {}", e))?;
-                        *slot = Some((repo_path.clone(), new_repo));
-                        &slot.as_ref().unwrap().1
-                    }
-                };
-                build_commit(repo, rc)
-            });
-            pb.inc(1);
-            result
-        })
-        .collect()
-}
-
-fn build_commit(repo: &Repository, rc: RawCommit) -> Result<ConventionalCommit> {
-    let mut parsed = rc.parsed;
-    parsed.files_changed = get_changed_files(repo, rc.oid)?;
-    Ok(parsed)
-}
-
-fn get_changed_files(repo: &Repository, oid: git2::Oid) -> Result<Vec<String>> {
-    let commit = repo.find_commit(oid)?;
-    let tree = commit.tree()?;
-    let parent_tree = if commit.parent_count() > 0 {
-        Some(commit.parent(0)?.tree()?)
-    } else {
-        None
-    };
-
-    let mut opts = DiffOptions::new();
-    let diff = repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), Some(&mut opts))?;
-
-    let mut files = Vec::new();
-    diff.foreach(
-        &mut |delta, _| {
-            if let Some(path) = delta.new_file().path() {
-                files.push(path.to_string_lossy().to_string());
-            }
-            true
-        },
-        None,
-        None,
-        None,
-    )?;
-
-    Ok(files)
+    spinner.finish_and_clear();
+    Ok(commits)
 }
 
 /// Fetch the remote tracking branch and check if local is behind.

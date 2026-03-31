@@ -53,10 +53,6 @@ struct Cli {
     /// Verbose output
     #[arg(long, short = 'v')]
     verbose: bool,
-
-    /// Number of parallel jobs for commit analysis (default: number of CPUs)
-    #[arg(long, short = 'j')]
-    jobs: Option<usize>,
 }
 
 /// Print and immediately flush to ensure output is visible.
@@ -192,28 +188,6 @@ fn main() -> Result<()> {
             style(">>").bold().blue(),
             style(&branch_ctx.branch_name).bold(),
             style(channel_info).dim()
-        );
-        printfl!();
-    }
-
-    let jobs = cli.jobs.unwrap_or_else(|| {
-        let cpus = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4);
-        (cpus / 2).max(1)
-    });
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(jobs)
-        .build_global()
-        .ok();
-
-    if !quiet {
-        let num_threads = rayon::current_num_threads();
-        printfl!(
-            "{} Using {} thread{}",
-            style(">>").bold().blue(),
-            style(num_threads).bold(),
-            if num_threads == 1 { "" } else { "s" }
         );
         printfl!();
     }
