@@ -109,20 +109,8 @@ pub fn determine_releases(
                 return Ok(None);
             }
 
-            // Only commits that trigger a bump should be considered for version calculation.
-            // chore:, docs:, ci:, etc. have BumpLevel::None and should not trigger a release.
-            let bump_commits: Vec<ConventionalCommit> = pkg_commits
-                .iter()
-                .filter(|c| c.bump > BumpLevel::None)
-                .cloned()
-                .collect();
-
-            if bump_commits.is_empty() {
-                return Ok(None);
-            }
-
             let next_version =
-                calculate_next_version(&tag_info.current_version, &bump_commits, branch_ctx)?;
+                calculate_next_version(&tag_info.current_version, &pkg_commits, branch_ctx)?;
 
             if next_version == tag_info.current_version {
                 return Ok(None);
@@ -179,15 +167,27 @@ fn calculate_next_version(
     commits: &[ConventionalCommit],
     branch_ctx: &BranchContext,
 ) -> Result<Version> {
+    // Filter once: only bump-worthy commits feed into version calculation.
+    // chore/docs/ci/style/test/build/refactor don't trigger releases.
+    let bump_commits: Vec<ConventionalCommit> = commits
+        .iter()
+        .filter(|c| c.bump > BumpLevel::None)
+        .cloned()
+        .collect();
+
+    if bump_commits.is_empty() {
+        return Ok(current.clone());
+    }
+
     if let Some(ref channel) = branch_ctx.prerelease {
-        return calculate_prerelease_version(current, commits, channel);
+        return calculate_prerelease_version(current, &bump_commits, channel);
     }
 
     if branch_ctx.maintenance {
-        return calculate_maintenance_version(current, commits);
+        return calculate_maintenance_version(current, &bump_commits);
     }
 
-    calculate_stable_version(current, commits)
+    calculate_stable_version(current, &bump_commits)
 }
 
 fn calculate_stable_version(current: &Version, commits: &[ConventionalCommit]) -> Result<Version> {
@@ -414,6 +414,177 @@ mod tests {
         let commits = vec![make_commit("fix: bug fix")];
         let result = calculate_maintenance_version(&current, &commits).unwrap();
         assert_eq!(result, Version::parse("1.5.3").unwrap());
+    }
+
+    // ── no-bump commit types should not trigger releases ──
+
+    fn stable_ctx() -> BranchContext {
+        BranchContext {
+            branch_name: "main".into(),
+            prerelease: None,
+            maintenance: false,
+        }
+    }
+
+    #[test]
+    fn test_chore_no_bump() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_next_version(&v, &[make_commit("chore: update deps")], &stable_ctx()).unwrap();
+        assert_eq!(result, v, "chore should not bump");
+    }
+
+    #[test]
+    fn test_docs_no_bump() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_next_version(&v, &[make_commit("docs: update readme")], &stable_ctx()).unwrap();
+        assert_eq!(result, v, "docs should not bump");
+    }
+
+    #[test]
+    fn test_ci_no_bump() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_next_version(&v, &[make_commit("ci: update workflow")], &stable_ctx()).unwrap();
+        assert_eq!(result, v, "ci should not bump");
+    }
+
+    #[test]
+    fn test_refactor_no_bump() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_next_version(&v, &[make_commit("refactor: simplify")], &stable_ctx()).unwrap();
+        assert_eq!(result, v, "refactor should not bump");
+    }
+
+    #[test]
+    fn test_style_no_bump() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_next_version(&v, &[make_commit("style: format")], &stable_ctx()).unwrap();
+        assert_eq!(result, v, "style should not bump");
+    }
+
+    #[test]
+    fn test_test_no_bump() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_next_version(&v, &[make_commit("test: add tests")], &stable_ctx()).unwrap();
+        assert_eq!(result, v, "test should not bump");
+    }
+
+    #[test]
+    fn test_build_no_bump() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_next_version(&v, &[make_commit("build: update config")], &stable_ctx()).unwrap();
+        assert_eq!(result, v, "build should not bump");
+    }
+
+    #[test]
+    fn test_feat_bumps_minor() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_stable_version(&v, &[make_commit("feat: add feature")]).unwrap();
+        assert_eq!(result, Version::parse("1.1.0").unwrap());
+    }
+
+    #[test]
+    fn test_fix_bumps_patch() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_stable_version(&v, &[make_commit("fix: bug fix")]).unwrap();
+        assert_eq!(result, Version::parse("1.0.1").unwrap());
+    }
+
+    #[test]
+    fn test_perf_bumps_patch() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_stable_version(&v, &[make_commit("perf: optimize")]).unwrap();
+        assert_eq!(result, Version::parse("1.0.1").unwrap());
+    }
+
+    #[test]
+    fn test_breaking_bumps_major() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_stable_version(&v, &[make_commit("feat!: redesign api")]).unwrap();
+        assert_eq!(result, Version::parse("2.0.0").unwrap());
+    }
+
+    #[test]
+    fn test_breaking_footer_bumps_major() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_stable_version(
+            &v,
+            &[make_commit("fix: change\n\nBREAKING CHANGE: new api")],
+        )
+        .unwrap();
+        assert_eq!(result, Version::parse("2.0.0").unwrap());
+    }
+
+    #[test]
+    fn test_highest_bump_wins() {
+        let v = Version::parse("1.0.0").unwrap();
+        let commits = vec![
+            make_commit("fix: small fix"),
+            make_commit("feat: new feature"),
+            make_commit("chore: update deps"),
+        ];
+        // Only fix + feat passed (chore filtered out before calling this).
+        // feat (minor) wins over fix (patch).
+        let bump_commits: Vec<_> = commits.into_iter().filter(|c| c.bump > BumpLevel::None).collect();
+        let result = calculate_stable_version(&v, &bump_commits).unwrap();
+        assert_eq!(result, Version::parse("1.1.0").unwrap());
+    }
+
+    #[test]
+    fn test_breaking_wins_over_feat() {
+        let v = Version::parse("1.0.0").unwrap();
+        let commits = vec![
+            make_commit("feat: add feature"),
+            make_commit("fix!: breaking fix"),
+        ];
+        let result = calculate_stable_version(&v, &commits).unwrap();
+        assert_eq!(result, Version::parse("2.0.0").unwrap());
+    }
+
+    // ── prerelease version calculation per commit type ──
+
+    #[test]
+    fn test_prerelease_feat_from_stable() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_prerelease_version(&v, &[make_commit("feat: thing")], "beta").unwrap();
+        assert_eq!(result, Version::parse("1.1.0-beta.1").unwrap());
+    }
+
+    #[test]
+    fn test_prerelease_fix_from_stable() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_prerelease_version(&v, &[make_commit("fix: thing")], "beta").unwrap();
+        assert_eq!(result, Version::parse("1.0.1-beta.1").unwrap());
+    }
+
+    #[test]
+    fn test_prerelease_breaking_from_stable() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result = calculate_prerelease_version(&v, &[make_commit("feat!: break")], "beta").unwrap();
+        assert_eq!(result, Version::parse("2.0.0-beta.1").unwrap());
+    }
+
+    // ── maintenance version calculation per commit type ──
+
+    #[test]
+    fn test_maintenance_fix_bumps_patch() {
+        let v = Version::parse("1.5.0").unwrap();
+        let result = calculate_maintenance_version(&v, &[make_commit("fix: thing")]).unwrap();
+        assert_eq!(result, Version::parse("1.5.1").unwrap());
+    }
+
+    #[test]
+    fn test_maintenance_feat_bumps_minor() {
+        let v = Version::parse("1.5.0").unwrap();
+        let result = calculate_maintenance_version(&v, &[make_commit("feat: thing")]).unwrap();
+        assert_eq!(result, Version::parse("1.6.0").unwrap());
+    }
+
+    #[test]
+    fn test_maintenance_breaking_capped_to_minor() {
+        let v = Version::parse("1.5.0").unwrap();
+        let result = calculate_maintenance_version(&v, &[make_commit("feat!: break")]).unwrap();
+        assert_eq!(result.major, 1, "Major should stay capped at 1");
+        assert_eq!(result, Version::parse("1.6.0").unwrap());
     }
 
     fn make_commit(message: &str) -> ConventionalCommit {

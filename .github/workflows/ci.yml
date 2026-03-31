@@ -44,6 +44,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: super-release-darwin-aarch64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: super-release-windows-x86_64
 
     steps:
       - uses: actions/checkout@v6
@@ -64,7 +67,8 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} --features vendored-openssl
 
-      - name: Package
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/super-release dist/super-release
@@ -72,7 +76,18 @@ jobs:
           tar czf ${{ matrix.artifact }}.tar.gz super-release
           shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
 
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item target/${{ matrix.target }}/release/super-release.exe dist/super-release.exe
+          Compress-Archive -Path dist/super-release.exe -DestinationPath dist/${{ matrix.artifact }}.zip
+          (Get-FileHash dist/${{ matrix.artifact }}.zip -Algorithm SHA256).Hash | Out-File dist/${{ matrix.artifact }}.zip.sha256
+
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
-          path: dist/${{ matrix.artifact }}.tar.gz*
+          path: |
+            dist/${{ matrix.artifact }}.tar.gz*
+            dist/${{ matrix.artifact }}.zip*
