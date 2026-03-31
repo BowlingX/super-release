@@ -32,13 +32,37 @@ try {
   });
   process.exit(0);
 } catch (err) {
+  if (err.code === "ENOENT" || err.code === "EACCES") {
+    console.error(`super-release: binary not found or not executable at ${binPath}`);
+    console.error(err);
+  } else if (err.status === null) {
+    // No exit status = binary couldn't run at all (wrong libc, missing interpreter)
+    console.error(`super-release: failed to execute binary at ${binPath}`);
+    console.error(`If running on Alpine/musl, ensure the musl build is being downloaded.`);
+    console.error(err);
+  }
   process.exit(err.status ?? 1);
+}
+
+function isMusl() {
+  try {
+    // ldd --version outputs to stderr on musl and exits non-zero
+    const result = execFileSync("ldd", ["--version"], { stdio: ["pipe", "pipe", "pipe"] });
+    return result.toString().includes("musl");
+  } catch (err) {
+    // On musl, ldd exits with error but stderr contains "musl"
+    if (err.stderr && err.stderr.toString().includes("musl")) {
+      return true;
+    }
+    return existsSync("/lib/ld-musl-x86_64.so.1") || existsSync("/lib/ld-musl-aarch64.so.1");
+  }
 }
 
 async function install() {
   const REPO = "bowlingx/super-release";
+  const musl = platform() === "linux" && isMusl();
   const PLATFORM_MAP = {
-    "linux-x64": "super-release-linux-x86_64",
+    "linux-x64": musl ? "super-release-linux-x86_64-musl" : "super-release-linux-x86_64",
     "linux-arm64": "super-release-linux-aarch64",
     "darwin-x64": "super-release-darwin-x86_64",
     "darwin-arm64": "super-release-darwin-aarch64",
