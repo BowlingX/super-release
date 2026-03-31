@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -79,65 +80,82 @@ pub fn determine_releases(
     // 4. Precompute file→package name mapping once.
     //    If any file in a commit matches a global dependency pattern,
     //    that commit affects ALL packages.
+    // 4. Build inverted index: package_name → Vec<commit_index> in a single pass.
     let has_ignore = !config.ignore.is_empty();
     let all_pkg_names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
-    let commit_packages: Vec<Vec<&str>> = all_commits
-        .iter()
-        .map(|c| {
-            // Filter out ignored files first
-            let relevant_files: Vec<&str> = if has_ignore {
-                c.files_changed
-                    .iter()
-                    .filter(|f| {
-                        !config
-                            .ignore
-                            .iter()
-                            .any(|pat| crate::config::glob_match(pat, f))
-                    })
-                    .map(|f| f.as_str())
-                    .collect()
-            } else {
-                c.files_changed.iter().map(|f| f.as_str()).collect()
-            };
+    let mut pkg_commit_indices: HashMap<&str, Vec<usize>> = HashMap::new();
 
-            if relevant_files.is_empty() {
-                return Vec::new();
-            }
-
-            let touches_global_dep = !config.dependencies.is_empty()
-                && relevant_files.iter().any(|f| {
-                    config
-                        .dependencies
+    for (i, c) in all_commits.iter().enumerate() {
+        let relevant_files: Vec<&str> = if has_ignore {
+            c.files_changed
+                .iter()
+                .filter(|f| {
+                    !config
+                        .ignore
                         .iter()
                         .any(|pat| crate::config::glob_match(pat, f))
-                });
+                })
+                .map(|f| f.as_str())
+                .collect()
+        } else {
+            c.files_changed.iter().map(|f| f.as_str()).collect()
+        };
 
-            if touches_global_dep {
-                all_pkg_names.clone()
-            } else {
-                relevant_files
+        if relevant_files.is_empty() {
+            continue;
+        }
+
+        let touches_global_dep = !config.dependencies.is_empty()
+            && relevant_files.iter().any(|f| {
+                config
+                    .dependencies
                     .iter()
-                    .filter_map(|f| file_to_package(f, packages).map(|p| p.name.as_str()))
-                    .collect()
-            }
-        })
-        .collect();
+                    .any(|pat| crate::config::glob_match(pat, f))
+            });
 
-    // 5. Process each package in parallel.
+        if touches_global_dep {
+            for name in &all_pkg_names {
+                pkg_commit_indices.entry(name).or_default().push(i);
+            }
+        } else {
+            // Deduplicate: a commit touching multiple files in the same package
+            let mut seen = HashSet::new();
+            for f in &relevant_files {
+                if let Some(pkg) = file_to_package(f, packages)
+                    && seen.insert(pkg.name.as_str())
+                {
+                    pkg_commit_indices
+                        .entry(pkg.name.as_str())
+                        .or_default()
+                        .push(i);
+                }
+            }
+        }
+    }
+
+    // 5. Process each package in parallel using the inverted index.
     let releases: Vec<Option<PackageRelease>> = packages
         .par_iter()
         .zip(tag_infos.par_iter())
         .map(|(pkg, tag_info)| {
-            let pkg_commits: Vec<ConventionalCommit> = all_commits
-                .iter()
-                .zip(commit_packages.iter())
-                .take_while(|(c, _)| match tag_info.cutoff_oid {
-                    Some(oid) => !oid.to_string().starts_with(&c.hash),
-                    None => true,
+            // Find the cutoff index: the position in all_commits of the tagged commit.
+            // All commits before this index (lower index = newer) are since the tag.
+            let cutoff_idx = tag_info
+                .cutoff_oid
+                .and_then(|cutoff| all_commits.iter().position(|c| c.oid == Some(cutoff)));
+
+            let pkg_commits: Vec<ConventionalCommit> = pkg_commit_indices
+                .get(pkg.name.as_str())
+                .map(|idxs| {
+                    idxs.iter()
+                        .filter(|&&i| match cutoff_idx {
+                            Some(cut) => i < cut,
+                            None => true,
+                        })
+                        .map(|&i| all_commits[i].clone())
+                        .collect()
                 })
-                .filter(|(_, pkg_names)| pkg_names.contains(&pkg.name.as_str()))
-                .map(|(c, _)| c.clone())
-                .collect();
+                .unwrap_or_default();
 
             if pkg_commits.is_empty() {
                 return Ok(None);

@@ -97,6 +97,7 @@ fn main() -> Result<()> {
     let pkg_resolver = resolver::create_resolver("node").expect("node resolver must exist");
     let mut packages = pkg_resolver.discover(&repo_root)?;
     pkg_resolver.resolve_dependencies(&mut packages);
+    package::sort_by_path_depth(&mut packages);
 
     if let Some(ref include) = cfg.packages {
         let before = packages.len();
@@ -448,38 +449,17 @@ fn finalize_git(
         return Ok(());
     }
 
-    // Stage only the files that plugins modified
+    // Stage only the files that plugins reported as modified
     if !modified_files.is_empty() {
         let mut add_cmd = Command::new("git");
         add_cmd.arg("add").current_dir(repo_root);
         for f in modified_files {
             add_cmd.arg(f);
         }
-        // Also stage any untracked changes from exec plugin (which can't report files)
-        // by adding the whole repo — but only if exec was used
         let output = add_cmd.output().context("Failed to run git add")?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             anyhow::bail!("git add failed: {}", stderr);
-        }
-    }
-
-    // Also stage any changes from exec plugin (it returns empty file lists)
-    // Check if there are unstaged changes beyond what we tracked
-    let has_unstaged = !Command::new("git")
-        .args(["diff", "--quiet"])
-        .current_dir(repo_root)
-        .status()?
-        .success();
-
-    if has_unstaged {
-        let output = Command::new("git")
-            .args(["add", "-u"])
-            .current_dir(repo_root)
-            .output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("git add -u failed: {}", stderr);
         }
     }
 

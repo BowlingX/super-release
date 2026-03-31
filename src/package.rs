@@ -69,19 +69,31 @@ pub fn topological_sort(packages: &[Package]) -> Result<Vec<String>> {
 
 /// Determine which package a file belongs to.
 /// Returns the most specific (longest path) matching package.
+///
+/// For best performance, pass packages pre-sorted by `sort_by_path_depth`.
 pub fn file_to_package<'a>(file_path: &str, packages: &'a [Package]) -> Option<&'a Package> {
     let file = Path::new(file_path);
 
-    packages
-        .iter()
-        .filter(|pkg| {
-            if pkg.path.as_os_str().is_empty() {
-                true
-            } else {
-                file.starts_with(&pkg.path)
-            }
-        })
-        .max_by_key(|pkg| pkg.path.components().count())
+    // Packages should be sorted deepest-first by sort_by_path_depth,
+    // so the first prefix match is the most specific.
+    for pkg in packages {
+        if !pkg.path.as_os_str().is_empty() && file.starts_with(&pkg.path) {
+            return Some(pkg);
+        }
+    }
+
+    // Fall back to root package (empty path)
+    packages.iter().find(|pkg| pkg.path.as_os_str().is_empty())
+}
+
+/// Sort packages by path depth descending so `file_to_package` can short-circuit.
+pub fn sort_by_path_depth(packages: &mut [Package]) {
+    packages.sort_by(|a, b| {
+        b.path
+            .components()
+            .count()
+            .cmp(&a.path.components().count())
+    });
 }
 
 #[cfg(test)]

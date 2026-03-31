@@ -31,14 +31,16 @@ impl fmt::Display for BumpLevel {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ConventionalCommit {
+    /// Short hash for display (8 chars).
     pub hash: String,
+    /// Full commit OID for exact comparisons.
+    pub oid: Option<git2::Oid>,
     pub commit_type: String,
     pub scope: Option<String>,
     pub description: String,
     pub body: Option<String>,
     pub breaking: bool,
     pub bump: BumpLevel,
-    /// The full original commit message (needed by git-cliff).
     pub raw_message: String,
     /// Files changed by this commit (relative paths).
     pub files_changed: Vec<String>,
@@ -78,6 +80,7 @@ pub fn parse_conventional_commit(hash: &str, message: &str) -> Option<Convention
 
     Some(ConventionalCommit {
         hash: hash.to_string(),
+        oid: None,
         commit_type,
         scope,
         description,

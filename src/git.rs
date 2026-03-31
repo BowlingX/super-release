@@ -167,7 +167,8 @@ pub fn get_commits_since(
         let message = commit.message().unwrap_or("").to_string();
         let hash8 = oid.to_string()[..8].to_string();
 
-        if let Some(parsed) = parse_conventional_commit(&hash8, &message) {
+        if let Some(mut parsed) = parse_conventional_commit(&hash8, &message) {
+            parsed.oid = Some(oid);
             raw_commits.push(RawCommit { oid, parsed });
         }
     }
