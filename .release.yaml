@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/bowlingx/super-release/main/schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/bowlingx/super-release/master/schema.json
 # super-release releases itself
 
 branches:
@@ -14,7 +14,7 @@ plugins:
       provenance: true
   - name: exec
     options:
-      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml && cargo update super-release"
+      prepare_cmd: "perl -i -pe 's/^version = .*/version = \"{version}\"/' Cargo.toml"
   - name: git-commit
     options:
       message: "chore(release): {releases} [skip ci]"

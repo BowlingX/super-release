@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -27,6 +27,7 @@ if (!existsSync(binPath)) {
 
 try {
   execFileSync(binPath, process.argv.slice(2), { stdio: "inherit" });
+  process.exit(0);
 } catch (err) {
   process.exit(err.status ?? 1);
 }
@@ -65,9 +66,9 @@ async function install() {
     await pipeline(response, createWriteStream(tmpFile));
 
     if (isWindows) {
-      execSync(`powershell -Command "Expand-Archive -Path '${tmpFile}' -DestinationPath '${__dirname}' -Force"`, { stdio: "ignore" });
+      execFileSync("powershell", ["-Command", `Expand-Archive -Path '${tmpFile}' -DestinationPath '${__dirname}' -Force`], { stdio: "ignore" });
     } else {
-      execSync(`tar xzf ${tmpFile} -C ${__dirname}`, { stdio: "ignore" });
+      execFileSync("tar", ["xzf", tmpFile, "-C", __dirname], { stdio: "ignore" });
       chmodSync(binPath, 0o755);
     }
     unlinkSync(tmpFile);

@@ -2,6 +2,9 @@
   "bin": {
     "super-release": "npm/bin/super-release.js"
   },
+  "scripts": {
+    "super-release": "node npm/bin/super-release.js"
+  },
   "description": "A fast semantic-release alternative for monorepos, written in Rust",
   "engines": {
     "node": ">=18"
