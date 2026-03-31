@@ -2,9 +2,6 @@
   "bin": {
     "super-release": "npm/bin/super-release.js"
   },
-  "scripts": {
-    "super-release": "node npm/bin/super-release.js"
-  },
   "description": "A fast semantic-release alternative for monorepos, written in Rust",
   "engines": {
     "node": ">=18"
@@ -31,6 +28,9 @@
     "type": "git",
     "url": "git+https://github.com/BowlingX/super-release.git"
   },
+  "scripts": {
+    "super-release": "node npm/bin/super-release.js"
+  },
   "type": "module",
-  "version": "0.3.0"
+  "version": "0.3.1"
 }
