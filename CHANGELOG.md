@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.0] - 2026-03-31
+
+### 🚀 Features
+
+- Review & performance improvements
+
+### ⚙️ Miscellaneous Tasks
+
+- Format
 ## [0.6.0] - 2026-03-31
 
 ### 🚀 Features
