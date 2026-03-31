@@ -26,7 +26,10 @@ if (!existsSync(binPath)) {
 }
 
 try {
-  execFileSync(binPath, process.argv.slice(2), { stdio: "inherit" });
+  execFileSync(binPath, process.argv.slice(2), {
+    stdio: "inherit",
+    env: { ...process.env, SUPER_RELEASE_VERSION: pkg.version },
+  });
   process.exit(0);
 } catch (err) {
   process.exit(err.status ?? 1);

@@ -13,11 +13,19 @@ use console::style;
 use std::io::{self, Write};
 use std::path::PathBuf;
 
+/// Version: prefer SUPER_RELEASE_VERSION env at runtime, fallback to Cargo.toml.
+fn runtime_version() -> &'static str {
+    match std::env::var("SUPER_RELEASE_VERSION") {
+        Ok(v) => Box::leak(v.into_boxed_str()),
+        Err(_) => env!("CARGO_PKG_VERSION"),
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(
     name = "super-release",
     about = "A fast semantic-release alternative for monorepos",
-    version,
+    version = runtime_version(),
     author
 )]
 struct Cli {
@@ -32,6 +40,15 @@ struct Cli {
     /// Path to the config file (defaults to .release.yaml in repo root)
     #[arg(long, short = 'c')]
     config: Option<PathBuf>,
+
+    /// Print the next version for a package and exit.
+    /// Use --package to select which package (defaults to root).
+    #[arg(long)]
+    show_next_version: bool,
+
+    /// Filter to a specific package (used with --show-next-version)
+    #[arg(long, short = 'p')]
+    package: Option<String>,
 
     /// Verbose output
     #[arg(long, short = 'v')]
@@ -62,16 +79,20 @@ fn main() -> Result<()> {
         config::load_config(&repo_root)?
     };
 
-    if cli.dry_run {
-        printfl!(
-            "{} {}",
-            style("super-release").bold().cyan(),
-            style("(dry run)").dim()
-        );
-    } else {
-        printfl!("{}", style("super-release").bold().cyan());
+    let quiet = cli.show_next_version;
+
+    if !quiet {
+        if cli.dry_run {
+            printfl!(
+                "{} {}",
+                style("super-release").bold().cyan(),
+                style("(dry run)").dim()
+            );
+        } else {
+            printfl!("{}", style("super-release").bold().cyan());
+        }
+        printfl!();
     }
-    printfl!();
 
     let pkg_resolver = resolver::create_resolver("node").expect("node resolver must exist");
     let mut packages = pkg_resolver.discover(&repo_root)?;
@@ -90,29 +111,33 @@ fn main() -> Result<()> {
     }
 
     if packages.is_empty() {
-        printfl!("{}", style("No packages found.").yellow());
+        if !quiet {
+            printfl!("{}", style("No packages found.").yellow());
+        }
         return Ok(());
     }
 
-    printfl!(
-        "{} Discovered {} package(s):",
-        style(">>").bold().blue(),
-        packages.len()
-    );
-    for pkg in &packages {
+    if !quiet {
         printfl!(
-            "   {} {} ({})",
-            style("*").dim(),
-            style(&pkg.name).bold(),
-            style(if pkg.path.as_os_str().is_empty() {
-                ".".into()
-            } else {
-                pkg.path.display().to_string()
-            })
-            .dim()
+            "{} Discovered {} package(s):",
+            style(">>").bold().blue(),
+            packages.len()
         );
+        for pkg in &packages {
+            printfl!(
+                "   {} {} ({})",
+                style("*").dim(),
+                style(&pkg.name).bold(),
+                style(if pkg.path.as_os_str().is_empty() {
+                    ".".into()
+                } else {
+                    pkg.path.display().to_string()
+                })
+                .dim()
+            );
+        }
+        printfl!();
     }
-    printfl!();
 
     let branch_ctx = match config::resolve_branch_context(&repo, &cfg)? {
         Some(ctx) => ctx,
@@ -131,11 +156,11 @@ fn main() -> Result<()> {
         }
     };
 
-    if !cli.dry_run {
+    if !cli.dry_run && !quiet {
         git::check_branch_up_to_date(&repo_root, &repo, &branch_ctx.branch_name)?;
     }
 
-    if cli.verbose || cli.dry_run {
+    if !quiet && (cli.verbose || cli.dry_run) {
         let channel_info = if let Some(ref pre) = branch_ctx.prerelease {
             format!(" (prerelease: {})", pre)
         } else if branch_ctx.maintenance {
@@ -163,16 +188,22 @@ fn main() -> Result<()> {
         .build_global()
         .ok();
 
-    let num_threads = rayon::current_num_threads();
-    printfl!(
-        "{} Using {} thread{}",
-        style(">>").bold().blue(),
-        style(num_threads).bold(),
-        if num_threads == 1 { "" } else { "s" }
-    );
-    printfl!();
+    if !quiet {
+        let num_threads = rayon::current_num_threads();
+        printfl!(
+            "{} Using {} thread{}",
+            style(">>").bold().blue(),
+            style(num_threads).bold(),
+            if num_threads == 1 { "" } else { "s" }
+        );
+        printfl!();
+    }
 
     let releases = version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
+
+    if cli.show_next_version {
+        return show_next_version(&packages, &releases, cli.package.as_deref());
+    }
 
     if releases.is_empty() {
         printfl!(
@@ -277,5 +308,41 @@ fn main() -> Result<()> {
         printfl!("{}", style("Release complete!").green().bold());
     }
 
+    Ok(())
+}
+
+/// Print the next version (or current if unchanged) for a package and exit.
+fn show_next_version(
+    packages: &[package::Package],
+    releases: &[version::PackageRelease],
+    filter: Option<&str>,
+) -> Result<()> {
+    let target = match filter {
+        Some(name) => packages
+            .iter()
+            .find(|p| p.name == name || config::glob_match(name, &p.name))
+            .ok_or_else(|| anyhow::anyhow!("Package '{}' not found", name))?,
+        None => {
+            if packages.len() == 1 {
+                &packages[0]
+            } else {
+                let root = packages.iter().find(|p| p.is_root);
+                root.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Multiple packages found. Use --package to select one: {}",
+                        packages.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ")
+                    )
+                })?
+            }
+        }
+    };
+
+    let version = releases
+        .iter()
+        .find(|r| r.package_name == target.name)
+        .map(|r| r.next_version.to_string())
+        .unwrap_or_else(|| target.version.to_string());
+
+    println!("{}", version);
     Ok(())
 }

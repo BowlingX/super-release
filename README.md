@@ -7,26 +7,34 @@ Analyzes [conventional commits](https://www.conventionalcommits.org/) to determi
 ## Features
 
 - Monorepo-first: discovers all `package.json` packages and associates commits by changed files
-- Parallel commit analysis using rayon (configurable with `-j`)
 - Prerelease branches (`beta`, `next`, or dynamic from branch name)
 - Maintenance branches (`1.x`, `2.x`) with major-version capping
 - Changelog generation powered by [git-cliff](https://git-cliff.org/)
-- Plugin system: changelog, npm, git-tag (extensible)
 - Configurable tag format templates
 - Dependency-aware npm publish (topological order)
 - Dry-run mode with pretty, truncated output
 
 ## Installation
 
+The easiest way — no install needed:
+
 ```bash
-cargo install --path .
+npx -y super-release --dry-run
 ```
 
-Or build a release binary:
+Or install as a dev dependency:
 
 ```bash
-cargo build --release
-# Binary at target/release/super-release
+# npm / yarn / pnpm
+pnpm add -D super-release
+```
+
+The npm package automatically downloads the prebuilt native binary for your platform on first run.
+
+Alternatively, build from source:
+
+```bash
+cargo install --path .
 ```
 
 ## Quick Start
@@ -38,6 +46,12 @@ super-release --dry-run
 # Run a release
 super-release
 
+# Get the next version for a package (useful in CI scripts)
+super-release --show-next-version
+
+# Get the next version for a specific package in a monorepo
+super-release --show-next-version --package @acme/core
+
 # Use 4 threads for commit analysis
 super-release -j 4
 ```
@@ -48,14 +62,34 @@ super-release -j 4
 Usage: super-release [OPTIONS]
 
 Options:
-  -n, --dry-run            Show what would happen without making changes
-  -C, --path <PATH>        Repository root [default: .]
-  -c, --config <CONFIG>    Path to config file [default: .release.yaml]
-  -v, --verbose            Verbose output
-  -j, --jobs <JOBS>        Parallel jobs for commit analysis [default: 50% of CPUs]
-  -h, --help               Print help
-  -V, --version            Print version
+  -n, --dry-run                Show what would happen without making changes
+  -C, --path <PATH>            Repository root [default: .]
+  -c, --config <CONFIG>        Path to config file [default: .release.yaml]
+      --show-next-version      Print the next version and exit
+  -p, --package <PACKAGE>      Filter to a specific package (for --show-next-version)
+  -v, --verbose                Verbose output
+  -j, --jobs <JOBS>            Parallel jobs for commit analysis [default: 50% of CPUs]
+  -h, --help                   Print help
+  -V, --version                Print version
 ```
+
+### `--show-next-version`
+
+Outputs only the next version (or the current version if no bump is needed) and exits silently. Useful for CI scripts that need the version for downstream steps:
+
+```bash
+# Use in CI to set a version variable
+VERSION=$(super-release --show-next-version)
+echo "Next version: $VERSION"
+
+# Build with the correct version baked in
+SUPER_RELEASE_VERSION=$VERSION cargo build --release
+
+# In a monorepo, query a specific package
+super-release --show-next-version -p @acme/core
+```
+
+In single-package repos, no `--package` flag is needed. In monorepos, if `--package` is omitted, the root package is used. If there's no root package, an error lists the available packages.
 
 ## How It Works
 
@@ -70,13 +104,13 @@ Options:
 
 super-release follows the [Conventional Commits](https://www.conventionalcommits.org/) specification:
 
-| Commit | Bump |
-|---|---|
-| `fix: ...` | patch |
-| `feat: ...` | minor |
-| `feat!: ...` or `BREAKING CHANGE:` in footer | major |
-| `perf: ...` | patch |
-| `chore: ...`, `docs: ...`, `ci: ...` | no release |
+| Commit                                       | Bump       |
+|----------------------------------------------|------------|
+| `fix: ...`                                   | patch      |
+| `feat: ...`                                  | minor      |
+| `feat!: ...` or `BREAKING CHANGE:` in footer | major      |
+| `perf: ...`                                  | patch      |
+| `chore: ...`, `docs: ...`, `ci: ...`         | no release |
 
 ## Configuration
 
@@ -127,12 +161,12 @@ plugins:
 
 Defines which branches can produce releases and what kind.
 
-| Form | Type | Example versions |
-|---|---|---|
-| `- main` | Stable | `1.0.0`, `1.1.0`, `2.0.0` |
-| `- name: beta`<br>`  prerelease: beta` | Prerelease (fixed channel) | `2.0.0-beta.1`, `2.0.0-beta.2` |
-| `- name: "test-*"`<br>`  prerelease: true` | Prerelease (branch name as channel) | `2.0.0-test-my-feature.1` |
-| `- name: "1.x"`<br>`  maintenance: true` | Maintenance | `1.5.1`, `1.6.0` (major capped) |
+| Form                                       | Type                                | Example versions                |
+|--------------------------------------------|-------------------------------------|---------------------------------|
+| `- main`                                   | Stable                              | `1.0.0`, `1.1.0`, `2.0.0`       |
+| `- name: beta`<br>`  prerelease: beta`     | Prerelease (fixed channel)          | `2.0.0-beta.1`, `2.0.0-beta.2`  |
+| `- name: "test-*"`<br>`  prerelease: true` | Prerelease (branch name as channel) | `2.0.0-test-my-feature.1`       |
+| `- name: "1.x"`<br>`  maintenance: true`   | Maintenance                         | `1.5.1`, `1.6.0` (major capped) |
 
 **Tag filtering by branch**: Stable branches only see stable tags. Prerelease branches see their own channel's tags plus stable tags. This prevents a `v2.0.0-beta.1` tag from affecting version calculation on `main`.
 
@@ -228,13 +262,13 @@ plugins:
       remote: origin              # git remote to push to (default: "origin")
 ```
 
-| Plugin | Prepare | Publish |
-|---|---|---|
-| `changelog` | Generates/updates changelog per package (parallel) | -- |
-| `npm` | Updates `package.json` versions (auto-detects npm/yarn/pnpm) | Publishes packages (parallel within dependency levels) |
-| `exec` | Runs custom shell command per package | Runs custom shell command per package |
-| `git-commit` | -- | Stages changed files, commits with release message, optionally pushes |
-| `git-tag` | -- | Creates annotated git tags, optionally pushes |
+| Plugin       | Prepare                                                      | Publish                                                               |
+|--------------|--------------------------------------------------------------|-----------------------------------------------------------------------|
+| `changelog`  | Generates/updates changelog per package (parallel)           | --                                                                    |
+| `npm`        | Updates `package.json` versions (auto-detects npm/yarn/pnpm) | Publishes packages (parallel within dependency levels)                |
+| `exec`       | Runs custom shell command per package                        | Runs custom shell command per package                                 |
+| `git-commit` | --                                                           | Stages changed files, commits with release message, optionally pushes |
+| `git-tag`    | --                                                           | Creates annotated git tags, optionally pushes                         |
 
 The default plugin order ensures: changelogs and version bumps are written first, then committed, then tagged.
 
@@ -298,9 +332,10 @@ super-release is designed to be fast:
 - **Precomputed file mapping**: file-to-package association is computed once, not per-package
 
 Benchmark (2001 commits, 8 packages, Apple Silicon):
-| Scenario | Time |
-|---|---|
-| All commits since initial tag | 0.11s |
+
+| Scenario                      | Time   |
+|-------------------------------|--------|
+| All commits since initial tag | 0.11s  |
 | 100 commits since recent tags | 0.035s |
 
 ## Acknowledgements
