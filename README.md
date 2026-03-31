@@ -1,8 +1,10 @@
 # super-release
 
-A fast and opinionated [semantic-release](https://semantic-release.gitbook.io/semantic-release) alternative for monorepos, written in Rust.
+A fast and opinionated [semantic-release](https://semantic-release.gitbook.io/semantic-release) alternative for
+monorepos, written in Rust.
 
-Analyzes [conventional commits](https://www.conventionalcommits.org/) to determine version bumps, generate changelogs, update `package.json` files, publish to npm, and create git tags -- across all packages in a monorepo, in parallel.
+Analyzes [conventional commits](https://www.conventionalcommits.org/) to determine version bumps, generate changelogs,
+update `package.json` files, publish to npm, and create git tags -- across all packages in a monorepo, in parallel.
 
 ## Features
 
@@ -10,13 +12,16 @@ Analyzes [conventional commits](https://www.conventionalcommits.org/) to determi
 - Prerelease branches (`beta`, `next`, or dynamic from branch name)
 - Maintenance branches (`1.x`, `2.x`) with major-version capping
 - Changelog generation powered by [git-cliff](https://git-cliff.org/)
+- Auto-detects package manager (npm, yarn, pnpm)
 - Configurable tag format templates
-- Dependency-aware npm publish (topological order)
+- Plugin system: changelog, npm, exec (extensible)
+- Global file dependencies and ignore patterns
+- Idempotent: safe to rerun after partial failures
 - Dry-run mode with pretty, truncated output
 
 ## Installation
 
-The easiest way — no install needed:
+The easiest way -- no install needed:
 
 ```bash
 npx -y super-release --dry-run
@@ -25,7 +30,6 @@ npx -y super-release --dry-run
 Or install as a dev dependency:
 
 ```bash
-# npm / yarn / pnpm
 pnpm add -D super-release
 ```
 
@@ -75,91 +79,104 @@ Options:
 
 ### `--show-next-version`
 
-Outputs only the next version (or the current version if no bump is needed) and exits silently. Useful for CI scripts that need the version for downstream steps:
+Outputs only the next version (or the current version if no bump is needed) and exits silently. Useful for CI scripts:
 
 ```bash
-# Use in CI to set a version variable
 VERSION=$(super-release --show-next-version)
-echo "Next version: $VERSION"
-
-# Build with the correct version baked in
 SUPER_RELEASE_VERSION=$VERSION cargo build --release
-
-# In a monorepo, query a specific package
-super-release --show-next-version -p @acme/core
 ```
 
-In single-package repos, no `--package` flag is needed. In monorepos, if `--package` is omitted, the root package is used. If there's no root package, an error lists the available packages.
+In monorepos, use `--package` to select which package: `super-release --show-next-version -p @acme/core`
 
 ## How It Works
 
-1. **Discover packages** -- finds all directories with a `package.json`
-2. **Resolve tags** -- finds the latest release tag per package (filtered by branch context)
+1. **Discover packages** -- finds all directories with a `package.json` (respects `.gitignore`)
+2. **Resolve tags** -- finds the latest release tag per package (filtered by branch context, only reachable from HEAD)
 3. **Walk commits** -- only analyzes commits since the oldest tag (not the entire history)
-4. **Associate commits to packages** -- maps changed files to their owning package
-5. **Calculate versions** -- uses git-cliff's conventional commit analysis to determine bump levels
-6. **Run plugins** -- changelog, npm publish, git tag (in configured order)
+4. **Associate commits to packages** -- maps changed files to their owning package (respects `dependencies` and `ignore`
+   config)
+5. **Calculate versions** -- determines bump levels from conventional commits
+6. **Run plugins** -- changelog, npm publish, exec commands
+7. **Git finalize** -- commits modified files, creates tags, optionally pushes
 
 ## Conventional Commits
 
-super-release follows the [Conventional Commits](https://www.conventionalcommits.org/) specification:
-
-| Commit                                       | Bump       |
-|----------------------------------------------|------------|
-| `fix: ...`                                   | patch      |
-| `feat: ...`                                  | minor      |
-| `feat!: ...` or `BREAKING CHANGE:` in footer | major      |
-| `perf: ...`                                  | patch      |
-| `chore: ...`, `docs: ...`, `ci: ...`         | no release |
+| Commit                                                | Bump       |
+|-------------------------------------------------------|------------|
+| `fix: ...`                                            | patch      |
+| `feat: ...`                                           | minor      |
+| `feat!: ...` or `BREAKING CHANGE:` in footer          | major      |
+| `perf: ...`                                           | patch      |
+| `chore: ...`, `docs: ...`, `ci: ...`, `refactor: ...` | no release |
 
 ## Configuration
 
-Create a `.release.yaml` (or `.release.yml`, `.super-release.yaml`) in your repository root. All fields are optional and have sensible defaults.
+Create a `.release.yaml` (or `.release.yml`, `.super-release.yaml`) in your repository root. All fields are optional
+with sensible defaults.
+
+A [JSON Schema](schema.json) is available for editor autocompletion:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/bowlingx/super-release/main/schema.json
+```
 
 ### Full Example
 
 ```yaml
-# Branch configurations
 branches:
-  # Stable branches (simple string = stable, no prerelease)
   - main
   - master
-
-  # Prerelease with a fixed channel name
   - name: beta
-    prerelease: beta          # -> 2.0.0-beta.1, 2.0.0-beta.2, ...
-
-  - name: next
-    prerelease: next          # -> 2.0.0-next.1, ...
-
-  # Prerelease using the branch name as the channel (for branch patterns)
+    prerelease: beta
   - name: "test-*"
-    prerelease: true          # branch test-foo -> 2.0.0-test-foo.1, ...
-
-  # Maintenance branches (caps major version, breaking changes -> minor)
+    prerelease: true
   - name: "1.x"
-    maintenance: true         # -> 1.5.1, 1.6.0 (never 2.0.0)
+    maintenance: true
 
-# Tag format templates (use {version} and {name} placeholders)
-tag_format: "v{version}"                  # root package: v1.2.3
-tag_format_package: "{name}/v{version}"   # sub-packages: @acme/core/v1.2.3
+tag_format: "v{version}"
+tag_format_package: "{name}/v{version}"
 
-# Packages to exclude from releasing (substring match on package name)
+packages:
+  - "@acme/*"
+
 exclude:
-  - my-private-pkg
+  - my-monorepo-root
 
-# Plugins run in order: prepare phase first, then publish phase
+# Files that trigger ALL packages when changed
+dependencies:
+  - yarn.lock
+  - pnpm-lock.yaml
+
+# Files to ignore -- commits touching only these won't trigger releases
+ignore:
+  - "README.md"
+  - "docs/**"
+  - "**/*.md"
+
 plugins:
   - name: changelog
   - name: npm
-  - name: git-tag
+    options:
+      provenance: true
+  - name: exec
+    options:
+      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"
+      files:
+        - Cargo.toml
+        - Cargo.lock
+
+git:
+  commit_message: "chore(release): {releases} [skip ci]"
+  push: false
+  remote: origin
 ```
 
 ### Reference
 
 #### `branches`
 
-Defines which branches can produce releases and what kind.
+Defines which branches can produce releases. Only configured branches are allowed -- running on an unconfigured branch
+exits cleanly.
 
 | Form                                       | Type                                | Example versions                |
 |--------------------------------------------|-------------------------------------|---------------------------------|
@@ -168,144 +185,124 @@ Defines which branches can produce releases and what kind.
 | `- name: "test-*"`<br>`  prerelease: true` | Prerelease (branch name as channel) | `2.0.0-test-my-feature.1`       |
 | `- name: "1.x"`<br>`  maintenance: true`   | Maintenance                         | `1.5.1`, `1.6.0` (major capped) |
 
-**Tag filtering by branch**: Stable branches only see stable tags. Prerelease branches see their own channel's tags plus stable tags. This prevents a `v2.0.0-beta.1` tag from affecting version calculation on `main`.
-
-**Prerelease behavior**: If the latest tag for a package is already on the same prerelease channel (e.g. `v2.0.0-beta.3`), the next release increments the prerelease number (`v2.0.0-beta.4`). If coming from a stable version, it computes the next stable bump and appends the channel (`v1.1.0-beta.1`).
-
-**Maintenance behavior**: Breaking changes (`feat!:`) are demoted to minor bumps so the major version never increases on a maintenance branch.
+**Tag filtering by branch**: Stable branches only see stable tags. Prerelease branches see their own channel's tags plus
+stable tags. Tags on other branches that haven't been merged are ignored.
 
 Default: `["main", "master"]`
 
-#### `tag_format`
+#### `tag_format` / `tag_format_package`
 
-Template for root package tags. Placeholders:
-- `{version}` -- the semver version (e.g. `1.2.3`, `2.0.0-beta.1`)
-- `{name}` -- the package name from `package.json`
+Templates for git tag names. Placeholders: `{version}`, `{name}`.
 
-Default: `"v{version}"`
-
-Examples:
 ```yaml
-tag_format: "v{version}"              # -> v1.2.3
-tag_format: "release-{version}"       # -> release-1.2.3
-tag_format: "{name}-v{version}"       # -> my-app-v1.2.3
+tag_format: "v{version}"                  # root: v1.2.3 (default)
+tag_format_package: "{name}/v{version}"   # sub-packages: @acme/core/v1.2.3 (default)
+tag_format_package: "{name}@{version}"    # semantic-release compat
 ```
 
-#### `tag_format_package`
+#### `dependencies`
 
-Template for sub-package tags in a monorepo.
+Global file dependency patterns. When a commit changes any matching file, ALL packages are considered affected.
 
-Default: `"{name}/v{version}"`
-
-Examples:
 ```yaml
-tag_format_package: "{name}/v{version}"    # -> @acme/core/v1.2.3
-tag_format_package: "{name}@{version}"     # -> @acme/core@1.2.3 (semantic-release compat)
+dependencies:
+  - yarn.lock
+  - pnpm-lock.yaml
+  - package.json
+  - ".github/**"
 ```
 
-To migrate from semantic-release's tag format, set `tag_format_package: "{name}@{version}"`.
+#### `ignore`
+
+Glob patterns for files to ignore. Commits that only touch ignored files will not trigger a release. If a commit touches
+both ignored and non-ignored files, only the non-ignored files determine which packages are affected.
+
+```yaml
+ignore:
+  - "README.md"
+  - "docs/**"
+  - "**/*.md"
+  - ".prettierrc"
+```
+
+#### `packages` / `exclude`
+
+Filter which packages are released. `packages` is an allow-list (glob patterns), `exclude` is a deny-list.
+
+```yaml
+packages:
+  - "@acme/*"
+exclude:
+  - my-monorepo-root
+```
 
 #### `plugins`
 
-Ordered list of plugins to execute. Each plugin runs its `prepare` phase, then its `publish` phase. Each plugin accepts an `options` object for customization.
-
-Default: `[changelog, npm, git-commit, git-tag]`
+Ordered list of plugins. Each plugin has a `name`, optional `packages` filter (glob), and `options`.
 
 ```yaml
 plugins:
   - name: changelog
     options:
-      filename: CHANGELOG.md      # output file per package (default: CHANGELOG.md)
-      preview_lines: 20           # max lines shown in dry-run (default: 20)
+      filename: CHANGELOG.md
+      preview_lines: 20
 
   - name: npm
+    packages: [ "@acme/*" ]       # only publish @acme packages
     options:
-      access: public              # npm access level (default: "public")
-      registry: https://registry.npmjs.org  # custom registry URL
-      tag: next                   # dist-tag override (default: auto from prerelease channel)
-      publish_args:               # extra args passed to the publish command
-        - "--otp=123456"
-      package_manager: yarn       # force specific PM (default: auto-detect)
+      access: public
+      provenance: true
+      registry: https://registry.npmjs.org
+      tag: next                 # dist-tag (default: auto from prerelease channel)
+      publish_args: [ "--otp=123456" ]
+      package_manager: yarn     # force specific PM (default: auto-detect)
 
   - name: exec
+    packages: [ "my-rust-lib" ]
     options:
-      # Run for all packages (omit `packages` to run for all)
-      prepare_cmd: "echo Releasing {name} v{version}"
-      # Or filter to specific packages:
-      # packages: ["@acme/core"]
-
-  # Multiple exec blocks for different packages:
-  # - name: exec
-  #   options:
-  #     packages: ["my-rust-project"]
-  #     prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"
-  # - name: exec
-  #   options:
-  #     packages: ["@acme/*"]
-  #     publish_cmd: "deploy.sh {name} {version}"
-
-  - name: git-commit
-    options:
-      # Commit message template. Placeholders:
-      #   {releases} - comma-separated list: "@acme/core@1.1.0, @acme/utils@1.0.1"
-      #   {summary}  - one per line: "  - @acme/core 1.0.0 -> 1.1.0"
-      #   {count}    - number of packages released
-      message: "chore(release): {releases} [skip ci]"
-      push: false                 # push after commit (default: false)
-      remote: origin              # git remote (default: "origin")
-      paths:                      # paths to stage (default: ["."])
-        - "."
-
-  - name: git-tag
-    options:
-      push: false                 # push tags to remote after creation (default: false)
-      remote: origin              # git remote to push to (default: "origin")
+      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"
+      publish_cmd: "cargo publish"
+      files: [ Cargo.toml, Cargo.lock ]   # include in git commit
 ```
 
-| Plugin       | Prepare                                                      | Publish                                                               |
-|--------------|--------------------------------------------------------------|-----------------------------------------------------------------------|
-| `changelog`  | Generates/updates changelog per package (parallel)           | --                                                                    |
-| `npm`        | Updates `package.json` versions (auto-detects npm/yarn/pnpm) | Publishes packages (parallel within dependency levels)                |
-| `exec`       | Runs custom shell command per package                        | Runs custom shell command per package                                 |
-| `git-commit` | --                                                           | Stages changed files, commits with release message, optionally pushes |
-| `git-tag`    | --                                                           | Creates annotated git tags, optionally pushes                         |
+| Plugin      | Prepare                                                      | Publish                                                |
+|-------------|--------------------------------------------------------------|--------------------------------------------------------|
+| `changelog` | Generates/updates changelog per package (parallel)           | --                                                     |
+| `npm`       | Updates `package.json` versions (auto-detects npm/yarn/pnpm) | Publishes packages (parallel within dependency levels) |
+| `exec`      | Runs custom shell command per package                        | Runs custom shell command per package                  |
 
-The default plugin order ensures: changelogs and version bumps are written first, then committed, then tagged.
+Plugins return the files they modified. The core git step stages exactly those files for the commit -- no `git add .`.
 
-#### `packages`
+Default: `[changelog, npm]`
 
-Optional list of glob patterns to include. When set, only packages whose name matches at least one pattern are released. Supports `*`, `?`, `[...]`, and `{a,b}` alternation.
+#### `git`
+
+Core git behavior after all plugins run. Not a plugin -- always runs.
 
 ```yaml
-# Only release packages in the @acme scope
-packages:
-  - "@acme/*"
-
-# Release specific packages
-packages:
-  - "@acme/core"
-  - "@acme/utils"
-
-# Multiple scopes
-packages:
-  - "{@acme/*,@tools/*}"
+git:
+  commit_message: "chore(release): {releases} [skip ci]"
+  push: false          # push commit + tags to remote
+  remote: origin
 ```
 
-Default: all discovered packages.
+Commit message placeholders:
 
-#### `exclude`
+- `{releases}` -- comma-separated: `@acme/core@1.1.0, @acme/utils@1.0.1`
+- `{summary}` -- one per line: `  - @acme/core 1.0.0 -> 1.1.0`
+- `{count}` -- number of packages released
 
-List of glob patterns to exclude from releasing. Applied after `packages`.
+The git step:
 
-```yaml
-exclude:
-  - my-monorepo-root
-  - "@acme/internal-*"
-```
+1. Stages only files reported by plugins
+2. Also stages any tracked-file changes (for exec commands that can't report files)
+3. Commits (or skips if nothing changed)
+4. Creates annotated tags for each release
+5. Pushes commit + tags if `push: true`
+
+Tags are idempotent -- existing tags are skipped. Already-published npm packages are detected and skipped on rerun.
 
 ## Monorepo Structure
-
-super-release discovers packages by finding `package.json` files recursively (skipping `node_modules`, `.git`, `dist`, `build`). Each commit is associated to a package based on which files it changed.
 
 ```
 my-monorepo/
@@ -320,30 +317,23 @@ my-monorepo/
       src/
 ```
 
-**Dependency-aware publishing**: The npm plugin builds a dependency graph from `dependencies`, `devDependencies`, and `peerDependencies`. Packages are published in topological order (dependencies before dependents), and interdependency version ranges are updated automatically (preserving `^`/`~` prefixes).
+Packages are discovered by finding `package.json` files recursively (respects `.gitignore`). Each commit is associated
+to a package based on which files it changed.
 
 ## Performance
 
-super-release is designed to be fast:
-
-- **Parallel diff computation**: commit diffs are computed across multiple threads (thread-local git repo handles)
-- **Tag-bounded history walk**: only walks commits since the oldest package tag, not the entire history
-- **Single-pass commit collection**: commits are fetched once and partitioned per package
-- **Precomputed file mapping**: file-to-package association is computed once, not per-package
-
-Benchmark (2001 commits, 8 packages, Apple Silicon):
-
-| Scenario                      | Time   |
-|-------------------------------|--------|
-| All commits since initial tag | 0.11s  |
-| 100 commits since recent tags | 0.035s |
+- **Parallel diff computation**: commit diffs computed across multiple threads
+- **Tag-bounded history walk**: only walks commits since the oldest package tag
+- **Single-pass commit collection**: commits fetched once, partitioned per package
+- **Reachable-only tags**: single revwalk to check tag reachability, stops early
 
 ## Acknowledgements
 
 super-release is inspired by and builds on the ideas of:
 
-- **[semantic-release](https://github.com/semantic-release/semantic-release)** — the original automated release tool that pioneered conventional-commit-based versioning. super-release follows the same philosophy but reimagines it in Rust with first-class monorepo support.
-- **[git-cliff](https://github.com/orhun/git-cliff)** — powers the changelog generation via `git-cliff-core`. An excellent standalone changelog generator with rich templating support.
+- **[semantic-release](https://github.com/semantic-release/semantic-release)** -- the original automated release tool
+  that pioneered conventional-commit-based versioning
+- **[git-cliff](https://github.com/orhun/git-cliff)** -- powers changelog generation via `git-cliff-core`
 
 ## License
 
