@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.1] - 2026-03-31
+
+### ⚙️ Miscellaneous Tasks
+
+- Cleanup
+- Removed artifacts, cleanup
 ## [0.2.0] - 2026-03-30
 
 ### 🚀 Features
