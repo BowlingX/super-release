@@ -160,6 +160,97 @@ fn test_dry_run_no_changes() {
 }
 
 #[test]
+fn test_chore_only_commits_no_release() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-pkg", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: initial"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    // Only chore/docs/ci commits — should NOT trigger a release
+    fs::write(root.join("index.js"), "// v1 updated").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: update deps"]);
+
+    fs::write(root.join("README.md"), "# docs").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "docs: update readme"]);
+
+    fs::write(root.join("index.js"), "// v1 refactored").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "ci: update workflow"]);
+
+    super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No releases needed"));
+}
+
+#[test]
+fn test_mixed_commits_only_bump_from_relevant() {
+    // chore + feat: should bump minor (from feat), not be skipped
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-pkg", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    // chore commit
+    fs::write(root.join("index.js"), "// chore change").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: update deps"]);
+
+    // feat commit
+    fs::write(root.join("index.js"), "// feat change").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: add feature"]);
+
+    // docs commit
+    fs::write(root.join("README.md"), "# docs").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "docs: update readme"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Failed:\n{}", stdout);
+    assert!(stdout.contains("1.1.0"), "Should bump minor:\n{}", stdout);
+    assert!(stdout.contains("minor"), "Should be minor bump:\n{}", stdout);
+}
+
+#[test]
 fn test_package_include_filter() {
     let dir = setup_monorepo();
 

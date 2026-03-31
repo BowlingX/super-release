@@ -109,8 +109,20 @@ pub fn determine_releases(
                 return Ok(None);
             }
 
+            // Only commits that trigger a bump should be considered for version calculation.
+            // chore:, docs:, ci:, etc. have BumpLevel::None and should not trigger a release.
+            let bump_commits: Vec<ConventionalCommit> = pkg_commits
+                .iter()
+                .filter(|c| c.bump > BumpLevel::None)
+                .cloned()
+                .collect();
+
+            if bump_commits.is_empty() {
+                return Ok(None);
+            }
+
             let next_version =
-                calculate_next_version(&tag_info.current_version, &pkg_commits, branch_ctx)?;
+                calculate_next_version(&tag_info.current_version, &bump_commits, branch_ctx)?;
 
             if next_version == tag_info.current_version {
                 return Ok(None);

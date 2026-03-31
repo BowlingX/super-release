@@ -148,6 +148,52 @@ mod tests {
     }
 
     #[test]
+    fn test_no_bump_commit_types() {
+        for msg in &[
+            "chore: update deps",
+            "docs: update readme",
+            "style: format code",
+            "test: add unit tests",
+            "ci: update workflow",
+            "build: update config",
+            "refactor: simplify logic",
+        ] {
+            let c = parse_conventional_commit("abc123", msg).unwrap();
+            assert_eq!(c.bump, BumpLevel::None, "Expected no bump for: {}", msg);
+        }
+    }
+
+    #[test]
+    fn test_bump_commit_types() {
+        let cases = [
+            ("feat: add feature", BumpLevel::Minor),
+            ("fix: fix bug", BumpLevel::Patch),
+            ("perf: optimize", BumpLevel::Patch),
+            ("revert: undo thing", BumpLevel::Patch),
+            ("feat!: breaking", BumpLevel::Major),
+            ("fix!: breaking fix", BumpLevel::Major),
+            ("chore!: breaking chore", BumpLevel::Major),
+        ];
+        for (msg, expected) in &cases {
+            let c = parse_conventional_commit("abc123", msg).unwrap();
+            assert_eq!(c.bump, *expected, "Wrong bump for: {}", msg);
+        }
+    }
+
+    #[test]
+    fn test_breaking_change_footer_on_any_type() {
+        for msg in &[
+            "chore: thing\n\nBREAKING CHANGE: breaks stuff",
+            "docs: update\n\nBREAKING-CHANGE: api changed",
+            "refactor: rewrite\n\nBREAKING CHANGE: new interface",
+        ] {
+            let c = parse_conventional_commit("abc123", msg).unwrap();
+            assert!(c.breaking, "Should be breaking: {}", msg);
+            assert_eq!(c.bump, BumpLevel::Major, "Should be major: {}", msg);
+        }
+    }
+
+    #[test]
     fn test_body_extraction() {
         let msg = "feat: something\n\nThis is the body\nwith multiple lines";
         let c = parse_conventional_commit("abc123", msg).unwrap();
