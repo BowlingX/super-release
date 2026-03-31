@@ -99,15 +99,33 @@ fn main() -> Result<()> {
     pkg_resolver.resolve_dependencies(&mut packages);
 
     if let Some(ref include) = cfg.packages {
+        let before = packages.len();
         packages.retain(|p| include.iter().any(|pat| config::glob_match(pat, &p.name)));
+        if !quiet && (cli.verbose || cli.dry_run) && packages.len() < before {
+            let excluded = before - packages.len();
+            printfl!(
+                "{} Filtered {} package(s) by 'packages' include patterns",
+                style(">>").dim(),
+                excluded
+            );
+        }
     }
 
     if !cfg.exclude.is_empty() {
+        let before = packages.len();
         packages.retain(|p| {
             !cfg.exclude
                 .iter()
                 .any(|pat| config::glob_match(pat, &p.name))
         });
+        if !quiet && (cli.verbose || cli.dry_run) && packages.len() < before {
+            let excluded = before - packages.len();
+            printfl!(
+                "{} Excluded {} package(s) by 'exclude' patterns",
+                style(">>").dim(),
+                excluded
+            );
+        }
     }
 
     if packages.is_empty() {
@@ -263,13 +281,18 @@ fn main() -> Result<()> {
     }
     printfl!();
 
+    // Core: bump package manifest versions before plugins run
+    printfl!(
+        "{} Bumping package versions",
+        style(">>").bold().blue()
+    );
+    let mut modified_files = pkg_resolver.bump_versions(&repo_root, &packages, &releases, cli.dry_run)?;
+
     let plugin_ctx = plugin::PluginContext {
         repo_root: &repo_root,
         dry_run: cli.dry_run,
         branch: &branch_ctx,
     };
-
-    let mut modified_files: Vec<std::path::PathBuf> = Vec::new();
 
     for plugin_cfg in &cfg.plugins {
         let p = match plugin::create_plugin(&plugin_cfg.name) {
@@ -313,6 +336,17 @@ fn main() -> Result<()> {
                 })
                 .cloned()
                 .collect();
+            if cli.verbose || cli.dry_run {
+                let skipped = releases.len() - fr.len();
+                if skipped > 0 {
+                    printfl!(
+                        "  {} Filtered to {} of {} release(s) by plugin packages filter",
+                        style(">>").dim(),
+                        fr.len(),
+                        releases.len()
+                    );
+                }
+            }
             (fp, fr)
         };
 

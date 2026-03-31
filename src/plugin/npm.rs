@@ -1,8 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs;
 
 use super::{parse_options, subprocess, Plugin, PluginConfig, PluginContext};
 use crate::package::{topological_sort, Package};
@@ -67,47 +66,6 @@ impl Plugin for NpmPlugin {
         }
         let opts: NpmOptions = parse_options(config)?;
         resolve_pm(ctx, &opts)?.verify()
-    }
-
-    fn prepare(
-        &self,
-        ctx: &PluginContext,
-        config: &PluginConfig,
-        packages: &[Package],
-        releases: &[PackageRelease],
-    ) -> Result<Vec<std::path::PathBuf>> {
-        let opts: NpmOptions = parse_options(config)?;
-        let pm = resolve_pm(ctx, &opts)?;
-        let order = topological_sort(packages)?;
-        let mut modified = Vec::new();
-
-        for pkg_name in &order {
-            if let Some(release) = releases.iter().find(|r| &r.package_name == pkg_name) {
-                let pkg = packages.iter().find(|p| &p.name == pkg_name).unwrap();
-                let manifest_path = ctx.repo_root.join(&pkg.manifest_path);
-
-                if ctx.dry_run {
-                    println!(
-                        "  [{}] Would update {}: {} -> {}",
-                        pm,
-                        pkg.manifest_path.display(),
-                        release.current_version,
-                        release.next_version
-                    );
-                } else {
-                    update_package_version(&manifest_path, &release.next_version)?;
-                    println!(
-                        "  [{}] Updated {} to {}",
-                        pm,
-                        pkg.manifest_path.display(),
-                        release.next_version
-                    );
-                }
-                modified.push(pkg.manifest_path.clone());
-            }
-        }
-
-        Ok(modified)
     }
 
     fn publish(
@@ -245,42 +203,9 @@ fn dependency_levels(
     levels
 }
 
-fn update_package_version(path: &std::path::Path, new_version: &semver::Version) -> Result<()> {
-    let content =
-        fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-
-    let mut pkg: serde_json::Value =
-        serde_json::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
-
-    pkg["version"] = serde_json::Value::String(new_version.to_string());
-
-    let output = serde_json::to_string_pretty(&pkg)?;
-    fs::write(path, format!("{}\n", output))?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_update_package_version() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("package.json");
-        fs::write(
-            &path,
-            r#"{"name":"@acme/core","version":"1.0.0","dependencies":{"@acme/utils":"^1.0.0"}}"#,
-        )
-        .unwrap();
-
-        update_package_version(&path, &semver::Version::new(1, 1, 0)).unwrap();
-
-        let content = fs::read_to_string(&path).unwrap();
-        let pkg: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(pkg["version"], "1.1.0");
-        assert_eq!(pkg["dependencies"]["@acme/utils"], "^1.0.0");
-    }
 
     #[test]
     fn test_dependency_levels() {

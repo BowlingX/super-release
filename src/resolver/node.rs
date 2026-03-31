@@ -3,10 +3,11 @@ use git2::Repository;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::PackageResolver;
 use crate::package::Package;
+use crate::version::PackageRelease;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct PackageJson {
@@ -43,6 +44,57 @@ impl PackageResolver for NodeResolver {
             pkg.local_dependencies = local;
         }
     }
+
+    fn bump_versions(
+        &self,
+        repo_root: &Path,
+        packages: &[Package],
+        releases: &[PackageRelease],
+        dry_run: bool,
+    ) -> Result<Vec<PathBuf>> {
+        let mut modified = Vec::new();
+
+        for release in releases {
+            let pkg = packages
+                .iter()
+                .find(|p| p.name == release.package_name)
+                .unwrap();
+            let manifest_path = repo_root.join(&pkg.manifest_path);
+
+            if dry_run {
+                println!(
+                    "  [version] Would update {}: {} -> {}",
+                    pkg.manifest_path.display(),
+                    release.current_version,
+                    release.next_version
+                );
+            } else {
+                update_package_version(&manifest_path, &release.next_version)?;
+                println!(
+                    "  [version] Updated {} to {}",
+                    pkg.manifest_path.display(),
+                    release.next_version
+                );
+            }
+            modified.push(pkg.manifest_path.clone());
+        }
+
+        Ok(modified)
+    }
+}
+
+fn update_package_version(path: &Path, new_version: &semver::Version) -> Result<()> {
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+
+    let mut pkg: serde_json::Value =
+        serde_json::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+
+    pkg["version"] = serde_json::Value::String(new_version.to_string());
+
+    let output = serde_json::to_string_pretty(&pkg)?;
+    std::fs::write(path, format!("{}\n", output))?;
+    Ok(())
 }
 
 fn find_package_jsons(
@@ -121,4 +173,47 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
         dependencies,
         dev_dependencies,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_update_package_version() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        std::fs::write(
+            &path,
+            r#"{"name":"@acme/core","version":"1.0.0","dependencies":{"@acme/utils":"^1.0.0"}}"#,
+        )
+        .unwrap();
+
+        update_package_version(&path, &semver::Version::new(1, 1, 0)).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let pkg: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(pkg["version"], "1.1.0");
+        // Dependencies are NOT rewritten
+        assert_eq!(pkg["dependencies"]["@acme/utils"], "^1.0.0");
+    }
+
+    #[test]
+    fn test_update_preserves_workspace_protocol() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        std::fs::write(
+            &path,
+            r#"{"name":"@acme/app","version":"1.0.0","dependencies":{"@acme/core":"workspace:*"}}"#,
+        )
+        .unwrap();
+
+        update_package_version(&path, &semver::Version::new(2, 0, 0)).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let pkg: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(pkg["version"], "2.0.0");
+        assert_eq!(pkg["dependencies"]["@acme/core"], "workspace:*");
+    }
 }
