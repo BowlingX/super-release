@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.6.0] - 2026-03-31
+
+### 🚀 Features
+
+- Refactored command exec, make clearer in what folder the commands are executed
 ## [0.5.1] - 2026-03-31
 
 ### 🐛 Bug Fixes
