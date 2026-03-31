@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.0] - 2026-03-31
+
+### 🚀 Features
+
+- Added windows support, adjusted npm wrapper
+
+### ⚙️ Miscellaneous Tasks
+
+- Make sure not to bump version for no-bump commits
 ## [0.2.1] - 2026-03-31
 
 ### ⚙️ Miscellaneous Tasks
