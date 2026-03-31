@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.10.0] - 2026-03-31
+
+### 🚀 Features
+
+- Add support for musl
 ## [0.9.0] - 2026-03-31
 
 ### 🚀 Features
