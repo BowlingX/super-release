@@ -1,8 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+use rayon::prelude::*;
 use serde::Deserialize;
 use std::process::Command;
 
-use super::{parse_options, Plugin, PluginConfig, PluginContext};
+use super::{parse_options, subprocess, Plugin, PluginConfig, PluginContext};
 use crate::package::Package;
 use crate::version::PackageRelease;
 
@@ -90,45 +91,40 @@ fn run_for_releases(
     phase: &str,
 ) -> Result<()> {
     let channel = ctx.branch.prerelease.as_deref().unwrap_or("");
+    let plugin_name = format!("exec:{}", phase);
+    let repo_root = ctx.repo_root;
+    let dry_run = ctx.dry_run;
 
-    for release in releases {
-        let cmd = cmd_template
-            .replace("{version}", &release.next_version.to_string())
-            .replace("{name}", &release.package_name)
-            .replace("{channel}", channel);
+    let results: Vec<Result<()>> = releases
+        .par_iter()
+        .map(|release| {
+            let cmd_str = cmd_template
+                .replace("{version}", &release.next_version.to_string())
+                .replace("{name}", &release.package_name)
+                .replace("{channel}", channel);
 
-        if ctx.dry_run {
-            println!("  [exec:{}] Would run: {}", phase, cmd);
-            continue;
-        }
-
-        println!("  [exec:{}] Running: {}", phase, cmd);
-
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(&cmd)
-            .current_dir(ctx.repo_root)
-            .output()
-            .with_context(|| format!("Failed to run: {}", cmd))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            anyhow::bail!(
-                "exec command failed (exit {}): {}\nstdout: {}\nstderr: {}",
-                output.status,
-                cmd,
-                stdout.trim(),
-                stderr.trim()
-            );
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !stdout.trim().is_empty() {
-            for line in stdout.lines().take(3) {
-                println!("    {}", line);
+            if dry_run {
+                println!("  [{}] Would run: {}", plugin_name, cmd_str);
+                println!("    {}", console::style(format!("in {}", repo_root.display())).dim());
+                return Ok(());
             }
-        }
+
+            println!("  [{}] Running: {}", plugin_name, cmd_str);
+            println!("    {}", console::style(format!("in {}", repo_root.display())).dim());
+
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c").arg(&cmd_str).current_dir(repo_root);
+
+            subprocess::run_command(cmd, &subprocess::RunOptions {
+                label: &cmd_str,
+                plugin_name: &plugin_name,
+                is_recoverable: None,
+            })
+        })
+        .collect();
+
+    for r in results {
+        r?;
     }
 
     Ok(())

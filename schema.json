@@ -180,8 +180,7 @@
         "access": {
           "type": "string",
           "enum": ["public", "restricted"],
-          "default": "public",
-          "description": "npm access level"
+          "description": "npm access level. If unset, npm's default applies (restricted for scoped, public for unscoped)."
         },
         "registry": {
           "type": "string",

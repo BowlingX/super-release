@@ -68,7 +68,7 @@ impl PackageManager {
     pub fn publish_command(
         &self,
         pkg_dir: &Path,
-        access: &str,
+        access: Option<&str>,
         registry: Option<&str>,
         tag: Option<&str>,
         provenance: bool,
@@ -93,7 +93,10 @@ impl PackageManager {
         };
 
         cmd.current_dir(pkg_dir);
-        cmd.arg("--access").arg(access);
+
+        if let Some(access) = access {
+            cmd.arg("--access").arg(access);
+        }
 
         if let Some(reg) = registry {
             cmd.arg("--registry").arg(reg);

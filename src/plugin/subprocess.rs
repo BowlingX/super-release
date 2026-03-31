@@ -26,21 +26,28 @@ pub fn format_command(cmd: &Command) -> String {
     }
 }
 
+/// Options for `run_command`.
+pub struct RunOptions<'a> {
+    /// Label shown in output (e.g. "@acme/core v1.1.0")
+    pub label: &'a str,
+    /// Plugin/context name shown in brackets (e.g. "npm", "exec:prepare")
+    pub plugin_name: &'a str,
+    /// Optional function to check if a failure is recoverable.
+    /// If it returns true for the combined output, the error is suppressed.
+    pub is_recoverable: Option<fn(&str) -> bool>,
+}
+
 /// Run a command with output handling:
 /// - TTY: shows a spinner with the last output line
 /// - On success: prints last 3 lines as summary
 /// - On error: dumps last 20 lines for debugging
-/// - Detects "already published" errors and treats them as success
-pub fn run_command(
-    mut cmd: Command,
-    label: &str,
-    plugin_name: &str,
-) -> Result<()> {
+/// - If `is_recoverable` returns true, treats the error as success
+pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = cmd
         .spawn()
-        .with_context(|| format!("Failed to run {} publish for {}", plugin_name, label))?;
+        .with_context(|| format!("[{}] Failed to spawn command for {}", opts.plugin_name, opts.label))?;
 
     let is_tty = console::Term::stdout().is_term();
 
@@ -48,18 +55,17 @@ pub fn run_command(
         let s = ProgressBar::new_spinner();
         s.set_style(
             ProgressStyle::default_spinner()
-                .template("  {spinner:.cyan} [{msg}] Publishing {prefix}...")
+                .template("  {spinner:.cyan} [{prefix}] {msg}")
                 .unwrap(),
         );
-        s.set_prefix(label.to_string());
-        s.set_message("starting");
+        s.set_prefix(opts.plugin_name.to_string());
+        s.set_message(format!("Running {}...", opts.label));
         s.enable_steady_tick(Duration::from_millis(80));
         Some(s)
     } else {
         None
     };
 
-    // Read stdout and stderr on separate threads to avoid pipe deadlock
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
@@ -82,17 +88,22 @@ pub fn run_command(
     if !status.success() {
         let full_output = all_output.join("\n");
 
-        if is_already_published(&full_output) {
-            println!("  [{}] {} already published, skipping", plugin_name, label);
+        if let Some(check) = opts.is_recoverable
+            && check(&full_output)
+        {
+            println!(
+                "  [{}] {} — recoverable, skipping",
+                opts.plugin_name, opts.label
+            );
             return Ok(());
         }
 
         let tail: Vec<&str> = all_output.iter().map(|s| s.as_str()).rev().take(20).collect();
         let tail: Vec<&str> = tail.into_iter().rev().collect();
         eprintln!(
-            "  [{}] {} publish output:\n{}",
-            style(plugin_name).red(),
-            label,
+            "  [{}] {} output:\n{}",
+            style(opts.plugin_name).red(),
+            opts.label,
             tail.iter()
                 .map(|l| format!("    {}", style(l).dim()))
                 .collect::<Vec<_>>()
@@ -100,9 +111,9 @@ pub fn run_command(
         );
 
         anyhow::bail!(
-            "{} publish failed for {} (exit code: {})",
-            plugin_name,
-            label,
+            "[{}] Command failed for {} (exit code: {})",
+            opts.plugin_name,
+            opts.label,
             status
         );
     }
@@ -115,9 +126,10 @@ pub fn run_command(
         .take(3)
         .collect();
 
-    println!("  [{}] Published {}", plugin_name, label);
-    for line in summary_lines.into_iter().rev() {
-        println!("    {}", style(line).dim());
+    if !summary_lines.is_empty() {
+        for line in summary_lines.into_iter().rev() {
+            println!("    {}", style(line).dim());
+        }
     }
 
     Ok(())
@@ -142,37 +154,16 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Detect "version already exists" errors from npm/yarn/pnpm.
-fn is_already_published(output: &str) -> bool {
-    let patterns = [
-        "previously published version",
-        "EPUBLISHCONFLICT",
-        "already been published",
-        "cannot publish over",
-        "Version already exists",
-    ];
-    patterns.iter().any(|p| output.contains(p))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_already_published_detection() {
-        assert!(is_already_published(
-            "npm ERR! 403 You cannot publish over the previously published versions: 1.0.0"
-        ));
-        assert!(is_already_published("npm error code EPUBLISHCONFLICT"));
-        assert!(is_already_published("This package has already been published"));
-        assert!(is_already_published("Version already exists"));
-        assert!(!is_already_published("npm ERR! 403 Forbidden"));
-        assert!(!is_already_published("network timeout"));
-    }
-
-    #[test]
     fn test_truncate() {
         assert_eq!(truncate("short", 60), "short");
-        assert_eq!(truncate("a".repeat(100).as_str(), 20), format!("{}...", "a".repeat(17)));
+        assert_eq!(
+            truncate("a".repeat(100).as_str(), 20),
+            format!("{}...", "a".repeat(17))
+        );
     }
 }

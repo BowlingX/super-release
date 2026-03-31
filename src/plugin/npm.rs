@@ -9,11 +9,11 @@ use crate::pm::PackageManager;
 use crate::version::PackageRelease;
 
 /// Options for the npm/publish plugin.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct NpmOptions {
-    /// Access level for publish (default: "public")
-    #[serde(default = "default_access")]
-    pub access: String,
+    /// Access level for publish ("public" or "restricted"). If unset, npm's default applies.
+    #[serde(default)]
+    pub access: Option<String>,
 
     /// Registry URL (overrides default)
     #[serde(default)]
@@ -34,23 +34,6 @@ pub struct NpmOptions {
     /// Force a specific package manager (overrides auto-detection).
     #[serde(default)]
     pub package_manager: Option<PackageManager>,
-}
-
-impl Default for NpmOptions {
-    fn default() -> Self {
-        Self {
-            access: default_access(),
-            registry: None,
-            publish_args: Vec::new(),
-            tag: None,
-            provenance: false,
-            package_manager: None,
-        }
-    }
-}
-
-fn default_access() -> String {
-    "public".into()
 }
 
 pub struct NpmPlugin;
@@ -91,25 +74,14 @@ impl Plugin for NpmPlugin {
         let mut errors: Vec<String> = Vec::new();
 
         for level in &levels {
-            let results: Vec<Result<()>> = if level.len() == 1 {
-                level
-                    .iter()
-                    .filter_map(|name| {
-                        let release = release_set.get(name.as_str())?;
-                        let pkg = packages.iter().find(|p| p.name == *name)?;
-                        Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm, dist_tag))
-                    })
-                    .collect()
-            } else {
-                level
-                    .par_iter()
-                    .filter_map(|name| {
-                        let release = release_set.get(name.as_str())?;
-                        let pkg = packages.iter().find(|p| p.name == *name)?;
-                        Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm, dist_tag))
-                    })
-                    .collect()
-            };
+            let results: Vec<Result<()>> = level
+                .par_iter()
+                .filter_map(|name| {
+                    let release = release_set.get(name.as_str())?;
+                    let pkg = packages.iter().find(|p| p.name == *name)?;
+                    Some(publish_one(repo_root, dry_run, pkg, release, &opts, pm, dist_tag))
+                })
+                .collect();
 
             for r in results {
                 if let Err(e) = r {
@@ -152,20 +124,28 @@ fn publish_one(
 
     let cmd = pm.publish_command(
         &pkg_dir,
-        &opts.access,
+        opts.access.as_deref(),
         opts.registry.as_deref(),
         dist_tag,
         opts.provenance,
         &opts.publish_args,
     );
 
+    let pm_name = pm.to_string();
+
     if dry_run {
-        println!("  [{}] Would publish {}: {}", pm, label, subprocess::format_command(&cmd));
+        println!("  [{}] Would publish {}: {}", pm_name, label, subprocess::format_command(&cmd));
+        println!("    {}", console::style(format!("in {}", pkg_dir.display())).dim());
         return Ok(());
     }
 
-    println!("  [{}] Publishing {}: {}", pm, label, subprocess::format_command(&cmd));
-    subprocess::run_command(cmd, &label, &pm.to_string())
+    println!("  [{}] Publishing {}: {}", pm_name, label, subprocess::format_command(&cmd));
+    println!("    {}", console::style(format!("in {}", pkg_dir.display())).dim());
+    subprocess::run_command(cmd, &subprocess::RunOptions {
+        label: &label,
+        plugin_name: &pm_name,
+        is_recoverable: Some(is_already_published),
+    })
 }
 
 fn dependency_levels(
@@ -203,9 +183,33 @@ fn dependency_levels(
     levels
 }
 
+/// Detect "version already exists" errors from npm/yarn/pnpm.
+fn is_already_published(output: &str) -> bool {
+    let patterns = [
+        "previously published version",
+        "EPUBLISHCONFLICT",
+        "already been published",
+        "cannot publish over",
+        "Version already exists",
+    ];
+    patterns.iter().any(|p| output.contains(p))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_already_published_detection() {
+        assert!(is_already_published(
+            "npm ERR! 403 You cannot publish over the previously published versions: 1.0.0"
+        ));
+        assert!(is_already_published("npm error code EPUBLISHCONFLICT"));
+        assert!(is_already_published("This package has already been published"));
+        assert!(is_already_published("Version already exists"));
+        assert!(!is_already_published("npm ERR! 403 Forbidden"));
+        assert!(!is_already_published("network timeout"));
+    }
 
     #[test]
     fn test_dependency_levels() {
