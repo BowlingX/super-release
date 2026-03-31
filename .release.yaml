@@ -14,7 +14,7 @@ plugins:
       provenance: true
   - name: exec
     options:
-      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"
+      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml && cargo update super-release"
   - name: git-commit
     options:
       message: "chore(release): {releases} [skip ci]"

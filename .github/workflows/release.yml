@@ -98,18 +98,18 @@ jobs:
 
       - uses: actions/download-artifact@v8
         with:
-          path: artifacts
+          path: .tmp
 
       - name: Extract super-release binary
         run: |
-          tar xzf artifacts/super-release-linux-x86_64/super-release-linux-x86_64.tar.gz
-          chmod +x super-release
+          tar xzf artifacts/super-release-linux-x86_64/super-release-linux-x86_64.tar.gz -C artifacts
+          chmod +x artifacts/super-release
 
       - name: Run super-release
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          ./super-release
+          ./artifacts/super-release
 
       - name: Push release commit and tags
         run: |
