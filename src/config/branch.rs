@@ -28,6 +28,11 @@ pub struct BranchDef {
 
     #[serde(default)]
     pub maintenance: bool,
+
+    /// Glob patterns to include. Only matching packages are released on this branch.
+    /// If empty, all packages are released.
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -64,6 +69,13 @@ impl BranchConfig {
             BranchConfig::Full(def) => def.maintenance,
         }
     }
+
+    pub fn packages(&self) -> &[String] {
+        match self {
+            BranchConfig::Name(_) => &[],
+            BranchConfig::Full(def) => &def.packages,
+        }
+    }
 }
 
 /// Resolved branch context for the current HEAD.
@@ -72,6 +84,8 @@ pub struct BranchContext {
     pub branch_name: String,
     pub prerelease: Option<String>,
     pub maintenance: bool,
+    /// Package include filter from branch config. Empty = all packages.
+    pub packages: Vec<String>,
 }
 
 /// Detect the current branch and resolve it against the branch config.
@@ -89,6 +103,7 @@ pub fn resolve_branch_context(
                 prerelease: bc.resolve_prerelease(&branch_name),
                 branch_name: branch_name.clone(),
                 maintenance: bc.is_maintenance(),
+                packages: bc.packages().to_vec(),
             }));
         }
     }
@@ -114,6 +129,7 @@ mod tests {
             name: "beta".into(),
             prerelease: PrereleaseSetting::Channel("beta".into()),
             maintenance: false,
+            packages: Vec::new(),
         });
         assert_eq!(bc.resolve_prerelease("beta").as_deref(), Some("beta"));
     }
@@ -124,6 +140,7 @@ mod tests {
             name: "test-*".into(),
             prerelease: PrereleaseSetting::Flag(true),
             maintenance: false,
+            packages: Vec::new(),
         });
         assert_eq!(
             bc.resolve_prerelease("test-hello").as_deref(),
@@ -138,6 +155,7 @@ mod tests {
             name: "staging".into(),
             prerelease: PrereleaseSetting::Flag(false),
             maintenance: false,
+            packages: Vec::new(),
         });
         assert!(bc.resolve_prerelease("staging").is_none());
     }
@@ -148,6 +166,7 @@ mod tests {
             name: "1.x".into(),
             prerelease: PrereleaseSetting::Disabled,
             maintenance: true,
+            packages: Vec::new(),
         });
         assert!(bc.is_maintenance());
         assert!(bc.resolve_prerelease("1.x").is_none());

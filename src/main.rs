@@ -192,7 +192,28 @@ fn main() -> Result<()> {
         printfl!();
     }
 
-    let releases = version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
+    let mut releases =
+        version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
+
+    // Apply branch-level package filter
+    if !branch_ctx.packages.is_empty() {
+        let before = releases.len();
+        releases.retain(|r| {
+            branch_ctx
+                .packages
+                .iter()
+                .any(|pat| config::glob_match(pat, &r.package_name))
+        });
+        let skipped = before - releases.len();
+        if skipped > 0 && !quiet && (cli.verbose || cli.dry_run) {
+            printfl!(
+                "{} Skipped {} package(s) not included in branch '{}' config",
+                style(">>").dim(),
+                skipped,
+                branch_ctx.branch_name
+            );
+        }
+    }
 
     if cli.show_next_version {
         return show_next_version(&packages, &releases, cli.package.as_deref());

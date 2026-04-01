@@ -99,6 +99,11 @@
           "type": "boolean",
           "default": false,
           "description": "Maintenance branch. Major version is capped, breaking changes become minor bumps"
+        },
+        "packages": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Glob patterns to include. Only matching packages are released on this branch. Empty = all."
         }
       }
     },

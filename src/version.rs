@@ -482,6 +482,7 @@ mod tests {
             branch_name: "main".into(),
             prerelease: None,
             maintenance: false,
+            packages: Vec::new(),
         }
     }
 
