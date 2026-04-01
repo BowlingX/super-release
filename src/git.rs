@@ -12,6 +12,9 @@ use crate::config::{BranchContext, Config};
 pub struct TagIndex {
     /// Tags matching per package: package_name → Vec<(tag_name, version)>
     per_package: HashMap<String, Vec<(String, Version)>>,
+    /// ALL stable versions per package, regardless of branch filtering.
+    /// Used to detect version collisions on maintenance branches.
+    all_stable_versions: HashMap<String, HashSet<Version>>,
 }
 
 impl TagIndex {
@@ -51,12 +54,20 @@ impl TagIndex {
         }
         let mut pre_candidates: Vec<PreCandidate> = Vec::new();
         let mut matched_tag_names: HashSet<String> = HashSet::new();
+        let mut all_stable_versions: HashMap<String, HashSet<Version>> = HashMap::new();
 
         for tag_name in tag_names.iter().flatten() {
             for (pkg_name, _is_root, tag_re) in &pkg_regexes {
                 let Some(v) = extract_version_from_tag(tag_name, tag_re) else {
                     continue;
                 };
+                // Collect ALL stable versions (unfiltered) for collision detection.
+                if v.pre.is_empty() {
+                    all_stable_versions
+                        .entry(pkg_name.to_string())
+                        .or_default()
+                        .insert(v.clone());
+                }
                 if !version_matches_branch(&v, branch_ctx) {
                     continue;
                 }
@@ -118,7 +129,10 @@ impl TagIndex {
             }
         }
 
-        Ok(TagIndex { per_package })
+        Ok(TagIndex {
+            per_package,
+            all_stable_versions,
+        })
     }
 
     /// Find the latest version tag for a package (highest semver).
@@ -147,6 +161,14 @@ impl TagIndex {
             })
             .max_by(|a, b| a.1.cmp(&b.1))
             .cloned()
+    }
+
+    /// Check if a specific version already exists as a stable tag for a package,
+    /// regardless of which branch it was released on.
+    pub fn version_exists(&self, package_name: &str, version: &Version) -> bool {
+        self.all_stable_versions
+            .get(package_name)
+            .is_some_and(|versions| versions.contains(version))
     }
 }
 

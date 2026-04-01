@@ -195,7 +195,21 @@ exits cleanly.
 | `- main`                                   | Stable                              | `1.0.0`, `1.1.0`, `2.0.0`       |
 | `- name: beta`<br>`  prerelease: beta`     | Prerelease (fixed channel)          | `2.0.0-beta.1`, `2.0.0-beta.2`  |
 | `- name: "test-*"`<br>`  prerelease: true` | Prerelease (branch name as channel) | `2.0.0-test-my-feature.1`       |
-| `- name: "1.x"`<br>`  maintenance: true`   | Maintenance                         | `1.5.1`, `1.6.0` (major capped) |
+| `- name: "1.x"`<br>`  maintenance: true`   | Maintenance (major locked)          | `1.5.1`, `1.6.0` (no `2.x`)     |
+| `- name: "1.5.x"`<br>`  maintenance: true` | Maintenance (major+minor locked)    | `1.5.1`, `1.5.2` (no `1.6.x`)   |
+
+Maintenance branches cap version bumps to stay within a range inferred from the branch name:
+- `1.x` -- major is locked: `feat:` bumps minor, `feat!:` is capped to minor, no major bumps
+- `1.5.x` -- major and minor are locked: all bumps become patch only
+
+If the branch name doesn't follow the `N.x` / `N.N.x` pattern, set `range` explicitly:
+
+```yaml
+branches:
+  - name: legacy-support
+    maintenance: true
+    range: "1.5.x"          # cap to 1.5.x patch range
+```
 
 Branches can also filter which packages they release with `packages`:
 

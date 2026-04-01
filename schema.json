@@ -98,7 +98,12 @@
         "maintenance": {
           "type": "boolean",
           "default": false,
-          "description": "Maintenance branch. Major version is capped, breaking changes become minor bumps"
+          "description": "Maintenance branch. Version bumps are capped to the range inferred from the branch name (e.g. 1.x allows minor, 1.5.x allows only patch)"
+        },
+        "range": {
+          "type": "string",
+          "description": "Explicit version range for maintenance branches (e.g. \"1.x\", \"1.5.x\"). If omitted, inferred from branch name.",
+          "examples": ["1.x", "1.5.x", "2.x"]
         },
         "packages": {
           "type": "array",

@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use semver::{Prerelease, Version};
 
 use crate::commit::{BumpLevel, ConventionalCommit};
-use crate::config::{BranchContext, Config};
+use crate::config::{BranchContext, Config, MaintenanceRange};
 use crate::git;
 use crate::package::{Package, file_to_package};
 
@@ -175,6 +175,14 @@ pub fn determine_releases(
         .par_iter()
         .zip(tag_infos.par_iter())
         .map(|(pkg, tag_info)| {
+            // On maintenance branches, skip packages whose version is outside the range.
+            if branch_ctx.maintenance
+                && let Some(ref range) = branch_ctx.maintenance_range
+                && !version_in_maintenance_range(&tag_info.current_version, range)
+            {
+                return Ok(None);
+            }
+
             let cutoff_idx = tag_info
                 .cutoff_oid
                 .and_then(|cutoff| oid_to_idx.get(&cutoff).copied());
@@ -201,6 +209,22 @@ pub fn determine_releases(
 
             if next_version == tag_info.current_version {
                 return Ok(None);
+            }
+
+            // On maintenance branches, check if the computed version already
+            // exists as a tag (released on another branch).
+            if branch_ctx.maintenance
+                && next_version.pre.is_empty()
+                && tag_index.version_exists(&pkg.name, &next_version)
+            {
+                anyhow::bail!(
+                    "Version {} for '{}' already exists as a tag. \
+                     The maintenance branch '{}' cannot release this version \
+                     because it was already released on another branch.",
+                    next_version,
+                    pkg.name,
+                    branch_ctx.branch_name,
+                );
             }
 
             let bump = classify_bump(&tag_info.current_version, &next_version);
@@ -268,7 +292,11 @@ fn calculate_next_version(
     }
 
     if branch_ctx.maintenance {
-        return calculate_maintenance_version(current, &bump_commits);
+        return calculate_maintenance_version(
+            current,
+            &bump_commits,
+            branch_ctx.maintenance_range.as_ref(),
+        );
     }
 
     calculate_stable_version(current, &bump_commits)
@@ -316,16 +344,50 @@ fn calculate_prerelease_version(
     Ok(next)
 }
 
+/// Check if a version fits within a maintenance range.
+fn version_in_maintenance_range(v: &Version, range: &MaintenanceRange) -> bool {
+    match range {
+        MaintenanceRange::Major(maj) => v.major == *maj,
+        MaintenanceRange::MajorMinor(maj, min) => v.major == *maj && v.minor == *min,
+    }
+}
+
 fn calculate_maintenance_version(
     current: &Version,
     commits: &[ConventionalCommit],
+    range: Option<&MaintenanceRange>,
 ) -> Result<Version> {
     let next = calculate_stable_version(current, commits)?;
 
-    if next.major > current.major {
-        Ok(Version::new(current.major, current.minor + 1, 0))
-    } else {
-        Ok(next)
+    match range {
+        // `1.5.x` — lock major AND minor, only patch bumps allowed.
+        Some(crate::config::MaintenanceRange::MajorMinor(_, _)) => {
+            if next.major > current.major || next.minor > current.minor {
+                Ok(Version::new(
+                    current.major,
+                    current.minor,
+                    current.patch + 1,
+                ))
+            } else {
+                Ok(next)
+            }
+        }
+        // `1.x` — lock major, minor bumps are allowed but major bumps are capped.
+        Some(crate::config::MaintenanceRange::Major(_)) => {
+            if next.major > current.major {
+                Ok(Version::new(current.major, current.minor + 1, 0))
+            } else {
+                Ok(next)
+            }
+        }
+        // No parseable range — default to capping major only (legacy).
+        None => {
+            if next.major > current.major {
+                Ok(Version::new(current.major, current.minor + 1, 0))
+            } else {
+                Ok(next)
+            }
+        }
     }
 }
 
@@ -401,6 +463,7 @@ pub fn apply_bump(version: &Version, bump: BumpLevel) -> Version {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::MaintenanceRange;
 
     #[test]
     fn test_apply_bump_patch() {
@@ -476,28 +539,75 @@ mod tests {
     }
 
     #[test]
-    fn test_maintenance_caps_major() {
+    fn test_maintenance_major_minor_caps_breaking_to_patch() {
+        // Branch 1.5.x — both major and minor locked
+        let range = Some(MaintenanceRange::MajorMinor(1, 5));
         let current = Version::parse("1.5.0").unwrap();
         let commits = vec![make_commit("feat!: breaking change")];
-        let result = calculate_maintenance_version(&current, &commits).unwrap();
-        assert_eq!(result.major, 1);
+        let result = calculate_maintenance_version(&current, &commits, range.as_ref()).unwrap();
+        assert_eq!(result, Version::parse("1.5.1").unwrap());
+    }
+
+    #[test]
+    fn test_maintenance_major_minor_caps_feat_to_patch() {
+        // Branch 1.5.x — feat would normally bump minor, capped to patch
+        let range = Some(MaintenanceRange::MajorMinor(1, 5));
+        let current = Version::parse("1.5.0").unwrap();
+        let commits = vec![make_commit("feat: add feature")];
+        let result = calculate_maintenance_version(&current, &commits, range.as_ref()).unwrap();
+        assert_eq!(result, Version::parse("1.5.1").unwrap());
+    }
+
+    #[test]
+    fn test_maintenance_major_allows_minor() {
+        // Branch 1.x — only major locked, minor bumps allowed
+        let range = Some(MaintenanceRange::Major(1));
+        let current = Version::parse("1.5.0").unwrap();
+        let commits = vec![make_commit("feat: add feature")];
+        let result = calculate_maintenance_version(&current, &commits, range.as_ref()).unwrap();
         assert_eq!(result, Version::parse("1.6.0").unwrap());
     }
 
     #[test]
-    fn test_maintenance_allows_minor() {
+    fn test_maintenance_major_caps_breaking() {
+        // Branch 1.x — breaking change capped to minor
+        let range = Some(MaintenanceRange::Major(1));
         let current = Version::parse("1.5.0").unwrap();
-        let commits = vec![make_commit("feat: add feature")];
-        let result = calculate_maintenance_version(&current, &commits).unwrap();
+        let commits = vec![make_commit("feat!: breaking change")];
+        let result = calculate_maintenance_version(&current, &commits, range.as_ref()).unwrap();
         assert_eq!(result, Version::parse("1.6.0").unwrap());
     }
 
     #[test]
     fn test_maintenance_allows_patch() {
+        let range = Some(MaintenanceRange::MajorMinor(1, 5));
         let current = Version::parse("1.5.2").unwrap();
         let commits = vec![make_commit("fix: bug fix")];
-        let result = calculate_maintenance_version(&current, &commits).unwrap();
+        let result = calculate_maintenance_version(&current, &commits, range.as_ref()).unwrap();
         assert_eq!(result, Version::parse("1.5.3").unwrap());
+    }
+
+    // ── version_in_maintenance_range ──
+
+    #[test]
+    fn test_version_in_maintenance_range() {
+        let v = Version::parse("1.5.0").unwrap();
+        assert!(version_in_maintenance_range(
+            &v,
+            &MaintenanceRange::Major(1)
+        ));
+        assert!(!version_in_maintenance_range(
+            &v,
+            &MaintenanceRange::Major(2)
+        ));
+        assert!(version_in_maintenance_range(
+            &v,
+            &MaintenanceRange::MajorMinor(1, 5)
+        ));
+        assert!(!version_in_maintenance_range(
+            &v,
+            &MaintenanceRange::MajorMinor(1, 4)
+        ));
     }
 
     // ── no-bump commit types should not trigger releases ──
@@ -507,6 +617,7 @@ mod tests {
             branch_name: "main".into(),
             prerelease: None,
             maintenance: false,
+            maintenance_range: None,
             packages: Vec::new(),
         }
     }
@@ -670,22 +781,31 @@ mod tests {
 
     #[test]
     fn test_maintenance_fix_bumps_patch() {
+        let range = Some(MaintenanceRange::Major(1));
         let v = Version::parse("1.5.0").unwrap();
-        let result = calculate_maintenance_version(&v, &[make_commit("fix: thing")]).unwrap();
+        let result =
+            calculate_maintenance_version(&v, &[make_commit("fix: thing")], range.as_ref())
+                .unwrap();
         assert_eq!(result, Version::parse("1.5.1").unwrap());
     }
 
     #[test]
-    fn test_maintenance_feat_bumps_minor() {
+    fn test_maintenance_major_range_feat_bumps_minor() {
+        let range = Some(MaintenanceRange::Major(1));
         let v = Version::parse("1.5.0").unwrap();
-        let result = calculate_maintenance_version(&v, &[make_commit("feat: thing")]).unwrap();
+        let result =
+            calculate_maintenance_version(&v, &[make_commit("feat: thing")], range.as_ref())
+                .unwrap();
         assert_eq!(result, Version::parse("1.6.0").unwrap());
     }
 
     #[test]
-    fn test_maintenance_breaking_capped_to_minor() {
+    fn test_maintenance_major_range_breaking_capped_to_minor() {
+        let range = Some(MaintenanceRange::Major(1));
         let v = Version::parse("1.5.0").unwrap();
-        let result = calculate_maintenance_version(&v, &[make_commit("feat!: break")]).unwrap();
+        let result =
+            calculate_maintenance_version(&v, &[make_commit("feat!: break")], range.as_ref())
+                .unwrap();
         assert_eq!(result.major, 1, "Major should stay capped at 1");
         assert_eq!(result, Version::parse("1.6.0").unwrap());
     }
