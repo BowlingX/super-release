@@ -148,14 +148,16 @@ fn publish_one(
 
     // Check if this exact version is already published
     let version_str = release.next_version.to_string();
-    let (already_published, view_cmd_str) =
-        check_version_published(&pkg.name, &version_str, opts.registry.as_deref());
+    let view_cmd_str = format_view_command(&pkg.name, &version_str, opts.registry.as_deref());
     println!(
         "  [{}] Checking registry for {}: {}",
         pm_name,
         label,
         console::style(&view_cmd_str).dim()
     );
+    let (already_published, view_result) =
+        run_version_check(&pkg.name, &version_str, opts.registry.as_deref());
+    println!("    {}", console::style(format!("→ {}", view_result)).dim());
     if already_published {
         println!("  [{}] {} already published, skipping", pm_name, label);
         return Ok(());
@@ -202,31 +204,41 @@ fn publish_one(
     )
 }
 
-/// Check if a specific version is already published. Returns (is_published, command_string).
-fn check_version_published(name: &str, version: &str, registry: Option<&str>) -> (bool, String) {
-    use std::process::Command;
+/// Format the npm view command for display.
+fn format_view_command(name: &str, version: &str, registry: Option<&str>) -> String {
+    let mut cmd = std::process::Command::new("npm");
+    cmd.args(["view", &format!("{}@{}", name, version), "version"]);
+    if let Some(reg) = registry {
+        cmd.args(["--registry", reg]);
+    }
+    subprocess::format_command(&cmd)
+}
 
-    let mut cmd = Command::new("npm");
+/// Run the npm view check. Returns (is_published, output_text).
+fn run_version_check(name: &str, version: &str, registry: Option<&str>) -> (bool, String) {
+    let mut cmd = std::process::Command::new("npm");
     cmd.args(["view", &format!("{}@{}", name, version), "version"]);
     cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::null());
+    cmd.stderr(std::process::Stdio::piped());
 
     if let Some(reg) = registry {
         cmd.args(["--registry", reg]);
     }
 
-    let cmd_str = subprocess::format_command(&cmd);
-
     let Ok(output) = cmd.output() else {
-        return (false, cmd_str);
+        return (false, "command failed".into());
     };
 
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
     if !output.status.success() {
-        return (false, cmd_str);
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let msg = if stderr.is_empty() { stdout } else { stderr };
+        return (false, msg);
     }
 
-    let published = String::from_utf8_lossy(&output.stdout).trim() == version;
-    (published, cmd_str)
+    let published = stdout == version;
+    (published, stdout)
 }
 
 fn dependency_levels(

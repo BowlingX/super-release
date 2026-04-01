@@ -621,17 +621,19 @@ plugins:
 
     // Create a fake `npm` script that:
     // - `npm view my-app@1.1.0 version` → prints "1.1.0" (already published)
-    // - `npm publish ...` → should never be called (would fail)
+    // - `npm publish ...` → writes a marker file and fails (proves it was called)
     // - `npm --version` → prints "10.0.0" (verify passes)
     let fake_bin = dir.path().join("fake-bin");
     fs::create_dir_all(&fake_bin).unwrap();
+    let publish_marker = dir.path().join("publish-was-called");
 
     let fake_npm = fake_bin.join("npm");
     #[cfg(unix)]
     {
         fs::write(
             &fake_npm,
-            r#"#!/bin/sh
+            format!(
+                r#"#!/bin/sh
 if [ "$1" = "view" ]; then
     echo "1.1.0"
     exit 0
@@ -639,10 +641,13 @@ elif [ "$1" = "--version" ]; then
     echo "10.0.0"
     exit 0
 elif [ "$1" = "publish" ]; then
+    touch "{}"
     echo "ERROR: publish should not be called" >&2
     exit 1
 fi
 "#,
+                publish_marker.display()
+            ),
         )
         .unwrap();
 
@@ -680,6 +685,111 @@ fi
     assert!(
         stdout.contains("already published, skipping"),
         "Should skip publish:\n{}",
+        stdout
+    );
+    // Verify publish was NOT called
+    assert!(
+        !publish_marker.exists(),
+        "npm publish should NOT have been called when version is already published"
+    );
+}
+
+#[test]
+fn test_npm_publish_called_when_not_published() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches: [main]
+plugins:
+  - name: npm
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    fs::write(root.join("index.js"), "// v1.1").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: new feature"]);
+
+    let fake_bin = dir.path().join("fake-bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let publish_marker = dir.path().join("publish-was-called");
+
+    let fake_npm = fake_bin.join("npm");
+    #[cfg(unix)]
+    {
+        // npm view returns 404 (not published), npm publish succeeds and writes marker
+        fs::write(
+            &fake_npm,
+            format!(
+                r#"#!/bin/sh
+if [ "$1" = "view" ]; then
+    echo "npm ERR! 404" >&2
+    exit 1
+elif [ "$1" = "--version" ]; then
+    echo "10.0.0"
+    exit 0
+elif [ "$1" = "publish" ]; then
+    touch "{}"
+    echo "+ my-app@1.1.0"
+    exit 0
+fi
+"#,
+                publish_marker.display()
+            ),
+        )
+        .unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_npm, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    {
+        return;
+    }
+
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let output = super_release_bin()
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Should succeed:\nstdout: {}\nstderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // Verify publish WAS called
+    assert!(
+        publish_marker.exists(),
+        "npm publish SHOULD have been called when version is not published:\n{}",
         stdout
     );
 }
