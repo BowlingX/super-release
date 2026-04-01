@@ -34,7 +34,6 @@ pub fn format_command(cmd: &Command) -> String {
 pub struct RunOptions<'a> {
     pub label: &'a str,
     pub plugin_name: &'a str,
-    pub is_recoverable: Option<fn(&str) -> bool>,
 }
 
 /// Run a command with live output streaming:
@@ -104,18 +103,6 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
     let all_output = all_output.lock().unwrap();
 
     if !status.success() {
-        let full_output = all_output.join("\n");
-
-        if let Some(check) = opts.is_recoverable
-            && check(&full_output)
-        {
-            MULTI.println(format!(
-                "  [{}] {} — recoverable, skipping",
-                opts.plugin_name, opts.label
-            ))?;
-            return Ok(());
-        }
-
         if is_tty {
             let tail: Vec<&str> = all_output
                 .iter()

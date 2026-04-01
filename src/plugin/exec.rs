@@ -123,7 +123,6 @@ fn run_for_releases(
                 &subprocess::RunOptions {
                     label: &cmd_str,
                     plugin_name: &plugin_name,
-                    is_recoverable: None,
                 },
             )
         })

@@ -123,6 +123,17 @@ fn publish_one(
 ) -> Result<()> {
     let pkg_dir = repo_root.join(&pkg.path);
     let label = format!("{} v{}", pkg.name, release.next_version);
+    let pm_name = pm.to_string();
+
+    // Check if this exact version is already published
+    if is_version_published(
+        &pkg.name,
+        &release.next_version.to_string(),
+        opts.registry.as_deref(),
+    ) {
+        println!("  [{}] {} already published, skipping", pm_name, label);
+        return Ok(());
+    }
 
     let cmd = pm.publish_command(
         &pkg_dir,
@@ -132,8 +143,6 @@ fn publish_one(
         opts.provenance,
         &opts.publish_args,
     );
-
-    let pm_name = pm.to_string();
 
     if dry_run {
         println!(
@@ -164,9 +173,33 @@ fn publish_one(
         &subprocess::RunOptions {
             label: &label,
             plugin_name: &pm_name,
-            is_recoverable: Some(is_already_published),
         },
     )
+}
+
+/// Check if a specific version of a package is already published to the registry.
+/// Uses `npm view` which works regardless of the workspace package manager.
+fn is_version_published(name: &str, version: &str, registry: Option<&str>) -> bool {
+    use std::process::Command;
+
+    let mut cmd = Command::new("npm");
+    cmd.args(["view", &format!("{}@{}", name, version), "version"]);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::null());
+
+    if let Some(reg) = registry {
+        cmd.args(["--registry", reg]);
+    }
+
+    let Ok(output) = cmd.output() else {
+        return false;
+    };
+
+    if !output.status.success() {
+        return false;
+    }
+
+    String::from_utf8_lossy(&output.stdout).trim() == version
 }
 
 fn dependency_levels(
@@ -204,35 +237,9 @@ fn dependency_levels(
     levels
 }
 
-/// Detect "version already exists" errors from npm/yarn/pnpm.
-fn is_already_published(output: &str) -> bool {
-    let patterns = [
-        "previously published version",
-        "EPUBLISHCONFLICT",
-        "already been published",
-        "cannot publish over",
-        "Version already exists",
-    ];
-    patterns.iter().any(|p| output.contains(p))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_already_published_detection() {
-        assert!(is_already_published(
-            "npm ERR! 403 You cannot publish over the previously published versions: 1.0.0"
-        ));
-        assert!(is_already_published("npm error code EPUBLISHCONFLICT"));
-        assert!(is_already_published(
-            "This package has already been published"
-        ));
-        assert!(is_already_published("Version already exists"));
-        assert!(!is_already_published("npm ERR! 403 Forbidden"));
-        assert!(!is_already_published("network timeout"));
-    }
 
     #[test]
     fn test_dependency_levels() {
