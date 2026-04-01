@@ -89,8 +89,10 @@ fn update_package_version(path: &Path, new_version: &semver::Version) -> Result<
     let content =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
 
-    static VERSION_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r#"("version"\s*:\s*)"[^"]*""#).unwrap());
+    static VERSION_RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"("version"\s*:\s*)"[^"]*""#)
+            .expect("version regex is invalid — this is a bug")
+    });
 
     // Replace only the "version" field value, preserving all other formatting.
     let re = &*VERSION_RE;

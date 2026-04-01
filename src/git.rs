@@ -151,14 +151,10 @@ impl TagIndex {
         package_name: &str,
         channel: &str,
     ) -> Option<(String, Version)> {
-        let prefix = format!("{}.", channel);
         self.per_package
             .get(package_name)?
             .iter()
-            .filter(|(_, v)| {
-                let pre = v.pre.as_str();
-                pre == channel || pre.starts_with(&prefix)
-            })
+            .filter(|(_, v)| crate::version::prerelease_matches_channel(v.pre.as_str(), channel))
             .max_by(|a, b| a.1.cmp(&b.1))
             .cloned()
     }
@@ -182,11 +178,7 @@ fn version_matches_branch(v: &Version, branch_ctx: &BranchContext) -> bool {
     match &branch_ctx.prerelease {
         None => v.pre.is_empty(),
         Some(channel) => {
-            if v.pre.is_empty() {
-                return true;
-            }
-            let pre = v.pre.as_str();
-            pre == channel || pre.starts_with(&format!("{}.", channel))
+            v.pre.is_empty() || crate::version::prerelease_matches_channel(v.pre.as_str(), channel)
         }
     }
 }

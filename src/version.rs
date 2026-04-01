@@ -380,6 +380,11 @@ fn calculate_maintenance_version(
     }
 }
 
+/// Check if a prerelease string matches a channel (e.g. "beta.1" matches "beta").
+pub fn prerelease_matches_channel(pre: &str, channel: &str) -> bool {
+    pre == channel || pre.starts_with(&format!("{}.", channel))
+}
+
 fn extract_prerelease_channel(version: &Version) -> Option<String> {
     let pre = version.pre.as_str();
     if pre.is_empty() {
