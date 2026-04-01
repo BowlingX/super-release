@@ -73,6 +73,27 @@ impl Plugin for NpmPlugin {
         let dry_run = ctx.dry_run;
         let mut errors: Vec<String> = Vec::new();
 
+        // Show publish order
+        if levels.len() > 1 || levels.first().map(|l| l.len() > 1).unwrap_or(false) {
+            println!("  [{}] Publish order:", pm);
+            for (i, level) in levels.iter().enumerate() {
+                let names: Vec<&str> = level
+                    .iter()
+                    .filter(|n| release_set.contains_key(n.as_str()))
+                    .map(|n| n.as_str())
+                    .collect();
+                if !names.is_empty() {
+                    let parallel = if names.len() > 1 { " (parallel)" } else { "" };
+                    println!(
+                        "    {} {}{}",
+                        console::style(format!("{}.", i + 1)).dim(),
+                        names.join(", "),
+                        console::style(parallel).dim()
+                    );
+                }
+            }
+        }
+
         for level in &levels {
             let results: Vec<Result<()>> = level
                 .par_iter()
@@ -126,11 +147,16 @@ fn publish_one(
     let pm_name = pm.to_string();
 
     // Check if this exact version is already published
-    if is_version_published(
-        &pkg.name,
-        &release.next_version.to_string(),
-        opts.registry.as_deref(),
-    ) {
+    let version_str = release.next_version.to_string();
+    let (already_published, view_cmd_str) =
+        check_version_published(&pkg.name, &version_str, opts.registry.as_deref());
+    println!(
+        "  [{}] Checking registry for {}: {}",
+        pm_name,
+        label,
+        console::style(&view_cmd_str).dim()
+    );
+    if already_published {
         println!("  [{}] {} already published, skipping", pm_name, label);
         return Ok(());
     }
@@ -176,9 +202,8 @@ fn publish_one(
     )
 }
 
-/// Check if a specific version of a package is already published to the registry.
-/// Uses `npm view` which works regardless of the workspace package manager.
-fn is_version_published(name: &str, version: &str, registry: Option<&str>) -> bool {
+/// Check if a specific version is already published. Returns (is_published, command_string).
+fn check_version_published(name: &str, version: &str, registry: Option<&str>) -> (bool, String) {
     use std::process::Command;
 
     let mut cmd = Command::new("npm");
@@ -190,15 +215,18 @@ fn is_version_published(name: &str, version: &str, registry: Option<&str>) -> bo
         cmd.args(["--registry", reg]);
     }
 
+    let cmd_str = subprocess::format_command(&cmd);
+
     let Ok(output) = cmd.output() else {
-        return false;
+        return (false, cmd_str);
     };
 
     if !output.status.success() {
-        return false;
+        return (false, cmd_str);
     }
 
-    String::from_utf8_lossy(&output.stdout).trim() == version
+    let published = String::from_utf8_lossy(&output.stdout).trim() == version;
+    (published, cmd_str)
 }
 
 fn dependency_levels(
