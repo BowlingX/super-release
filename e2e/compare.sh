@@ -128,6 +128,9 @@ git_fetch_all() {
   git -C "$dir" fetch origin 'refs/notes/*:refs/notes/*' --quiet 2>/dev/null || true
 }
 
+# Last SR output — saved for debugging on failure
+SR_LAST_OUTPUT=""
+
 # Get version from semantic-release (dry-run)
 sr_version() {
   local dir="$1"
@@ -138,12 +141,11 @@ sr_version() {
   git_fetch_all "$dir"
 
   # Run semantic-release in dry-run mode, capture all output
-  local output
-  output=$((cd "$dir" && "$SR_BIN" --dry-run --no-ci) 2>&1) || true
+  SR_LAST_OUTPUT=$((cd "$dir" && "$SR_BIN" --dry-run --no-ci) 2>&1) || true
 
   # Parse "The next release version is X.Y.Z" from output
   local parsed
-  parsed=$(echo "$output" | grep -oE 'next release version is [0-9][^ ]*' | head -1 | sed 's/next release version is //')
+  parsed=$(echo "$SR_LAST_OUTPUT" | grep -oE 'next release version is [0-9][^ ]*' | head -1 | sed 's/next release version is //')
   if [ -n "$parsed" ]; then
     echo "$parsed" | tr -d '[:space:]'
     return
@@ -152,17 +154,19 @@ sr_version() {
   echo "NO_RELEASE"
 }
 
+# Last super-release output
+OUR_LAST_OUTPUT=""
+
 # Get version from super-release
 our_version() {
   local dir="$1"
 
-  local result
-  result=$("$SUPER_RELEASE" --show-next-version -C "$dir" 2>/dev/null) || true
+  OUR_LAST_OUTPUT=$("$SUPER_RELEASE" --show-next-version -C "$dir" 2>&1) || true
 
-  if [ -z "$result" ]; then
+  if [ -z "$OUR_LAST_OUTPUT" ]; then
     echo "NO_RELEASE"
   else
-    echo "$result" | tr -d '[:space:]'
+    echo "$OUR_LAST_OUTPUT" | tr -d '[:space:]'
   fi
 }
 
@@ -179,6 +183,10 @@ compare() {
     echo -e "  ${RED}FAIL${NC} ${BOLD}$name${NC}"
     echo -e "       semantic-release: ${YELLOW}$sr${NC}"
     echo -e "       super-release:    ${YELLOW}$us${NC}"
+    echo -e "       ${DIM}── semantic-release output ──${NC}"
+    echo "$SR_LAST_OUTPUT" | tail -20 | sed 's/^/       /'
+    echo -e "       ${DIM}── super-release output ──${NC}"
+    echo "$OUR_LAST_OUTPUT" | tail -10 | sed 's/^/       /'
     FAIL=$((FAIL + 1))
   fi
 }
