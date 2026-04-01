@@ -37,12 +37,13 @@ trap cleanup EXIT
 
 TMPBASE=$(mktemp -d)
 
-# Install semantic-release + exec plugin once into shared location
+# Install semantic-release from the pinned e2e/package.json + lock file.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SR_MODULES="$TMPBASE/sr-modules"
 mkdir -p "$SR_MODULES"
-echo '{"private": true}' > "$SR_MODULES/package.json"
-echo -e "${DIM}Installing semantic-release...${NC}"
-npm install --prefix "$SR_MODULES" semantic-release @semantic-release/commit-analyzer @semantic-release/release-notes-generator --save-dev --silent 2>/dev/null
+cp "$SCRIPT_DIR/package.json" "$SCRIPT_DIR/package-lock.json" "$SR_MODULES/"
+echo -e "${DIM}Installing semantic-release (from lock file)...${NC}"
+npm ci --prefix "$SR_MODULES" --silent 2>/dev/null
 SR_BIN="$SR_MODULES/node_modules/.bin/semantic-release"
 export NODE_PATH="$SR_MODULES/node_modules"
 
