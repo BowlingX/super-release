@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.13.0] - 2026-04-01
+
+### 🚀 Features
+
+- Test if the version is already published before publishing
 ## [0.12.0] - 2026-04-01
 
 ### 🚀 Features
