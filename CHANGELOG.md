@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.2] - 2026-04-01
+
+### 🐛 Bug Fixes
+
+- Some cleanup / refactoring
+- Fail on invalid / missing maintenance branch ranges
 ## [1.1.1] - 2026-04-01
 
 ### 🐛 Bug Fixes
