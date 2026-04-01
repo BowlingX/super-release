@@ -56,8 +56,9 @@ setup_repo() {
   local dir="$TMPBASE/repo-$$-$RANDOM"
   local bare="$dir.bare"
 
-  # Create a local bare repo as remote (semantic-release requires a valid remote)
-  git init --bare --quiet "$bare"
+  # Create a local bare repo as remote (semantic-release requires a valid remote).
+  # Set default branch to 'main' explicitly — CI runners may default to 'master'.
+  git init --bare --quiet --initial-branch=main "$bare"
 
   mkdir -p "$dir"
   git -C "$dir" init -b main --quiet
