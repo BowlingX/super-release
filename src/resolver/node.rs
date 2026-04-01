@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use git2::Repository;
+use regex::Regex;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use super::PackageResolver;
 use crate::package::Package;
@@ -58,7 +60,7 @@ impl PackageResolver for NodeResolver {
             let pkg = packages
                 .iter()
                 .find(|p| p.name == release.package_name)
-                .unwrap();
+                .context(format!("package '{}' not found", release.package_name))?;
             let manifest_path = repo_root.join(&pkg.manifest_path);
 
             if dry_run {
@@ -87,13 +89,19 @@ fn update_package_version(path: &Path, new_version: &semver::Version) -> Result<
     let content =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
 
-    let mut pkg: serde_json::Value =
-        serde_json::from_str(&content).with_context(|| format!("parsing {}", path.display()))?;
+    static VERSION_RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"("version"\s*:\s*)"[^"]*""#).unwrap());
 
-    pkg["version"] = serde_json::Value::String(new_version.to_string());
+    // Replace only the "version" field value, preserving all other formatting.
+    let re = &*VERSION_RE;
+    let replacement = format!(r#"${{1}}"{}""#, new_version);
+    let updated = re.replace(&content, replacement.as_str());
 
-    let output = serde_json::to_string_pretty(&pkg)?;
-    std::fs::write(path, format!("{}\n", output))?;
+    if updated == content {
+        anyhow::bail!("Could not find \"version\" field in {}", path.display());
+    }
+
+    std::fs::write(path, updated.as_bytes())?;
     Ok(())
 }
 
@@ -184,36 +192,51 @@ mod tests {
     fn test_update_package_version() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("package.json");
-        std::fs::write(
-            &path,
-            r#"{"name":"@acme/core","version":"1.0.0","dependencies":{"@acme/utils":"^1.0.0"}}"#,
-        )
-        .unwrap();
+        let original =
+            r#"{"name":"@acme/core","version":"1.0.0","dependencies":{"@acme/utils":"^1.0.0"}}"#;
+        std::fs::write(&path, original).unwrap();
 
         update_package_version(&path, &semver::Version::new(1, 1, 0)).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
-        let pkg: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(pkg["version"], "1.1.0");
-        // Dependencies are NOT rewritten
-        assert_eq!(pkg["dependencies"]["@acme/utils"], "^1.0.0");
+        // Exact formatting preserved, only version value changed
+        assert_eq!(
+            content,
+            r#"{"name":"@acme/core","version":"1.1.0","dependencies":{"@acme/utils":"^1.0.0"}}"#
+        );
+    }
+
+    #[test]
+    fn test_update_preserves_formatting() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        let original =
+            "{\n  \"name\": \"my-pkg\",\n  \"version\": \"1.0.0\",\n  \"private\": true\n}\n";
+        std::fs::write(&path, original).unwrap();
+
+        update_package_version(&path, &semver::Version::new(2, 0, 0)).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            content,
+            "{\n  \"name\": \"my-pkg\",\n  \"version\": \"2.0.0\",\n  \"private\": true\n}\n"
+        );
     }
 
     #[test]
     fn test_update_preserves_workspace_protocol() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("package.json");
-        std::fs::write(
-            &path,
-            r#"{"name":"@acme/app","version":"1.0.0","dependencies":{"@acme/core":"workspace:*"}}"#,
-        )
-        .unwrap();
+        let original =
+            r#"{"name":"@acme/app","version":"1.0.0","dependencies":{"@acme/core":"workspace:*"}}"#;
+        std::fs::write(&path, original).unwrap();
 
         update_package_version(&path, &semver::Version::new(2, 0, 0)).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
-        let pkg: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(pkg["version"], "2.0.0");
-        assert_eq!(pkg["dependencies"]["@acme/core"], "workspace:*");
+        assert_eq!(
+            content,
+            r#"{"name":"@acme/app","version":"2.0.0","dependencies":{"@acme/core":"workspace:*"}}"#
+        );
     }
 }
