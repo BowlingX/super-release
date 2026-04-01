@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.13.3] - 2026-04-01
+
+### 🐛 Bug Fixes
+
+- Adjusted checks, more output
 ## [0.13.2] - 2026-04-01
 
 ### 🐛 Bug Fixes
