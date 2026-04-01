@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rayon::prelude::*;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::{Plugin, PluginConfig, PluginContext, parse_options, subprocess};
 use crate::package::{Package, topological_sort};
@@ -68,37 +68,84 @@ impl Plugin for NpmPlugin {
             .map(|r| (r.package_name.as_str(), r))
             .collect();
 
-        let levels = dependency_levels(&order, packages, &release_set);
         let repo_root = ctx.repo_root;
         let dry_run = ctx.dry_run;
         let mut errors: Vec<String> = Vec::new();
 
-        // Show publish order
-        if levels.len() > 1 || levels.first().map(|l| l.len() > 1).unwrap_or(false) {
-            println!("  [{}] Publish order:", pm);
-            for (i, level) in levels.iter().enumerate() {
-                let names: Vec<&str> = level
+        // Check all packages against the registry in parallel (read-only, no ordering needed)
+        println!("  [{}] Checking registry for published versions...", pm);
+        let already_published: HashSet<String> = releases
+            .par_iter()
+            .filter_map(|r| {
+                let version_str = r.next_version.to_string();
+                let view_cmd_str =
+                    format_view_command(&r.package_name, &version_str, opts.registry.as_deref());
+                println!(
+                    "    {} {}",
+                    console::style(&r.package_name).bold(),
+                    console::style(&view_cmd_str).dim()
+                );
+                let (published, result) =
+                    run_version_check(&r.package_name, &version_str, opts.registry.as_deref());
+                println!(
+                    "    {} {}",
+                    console::style(&r.package_name).bold(),
+                    console::style(format!("→ {}", result)).dim()
+                );
+                if published {
+                    Some(r.package_name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if !already_published.is_empty() {
+            for name in &already_published {
+                let ver = releases
                     .iter()
-                    .filter(|n| release_set.contains_key(n.as_str()))
-                    .map(|n| n.as_str())
-                    .collect();
-                if !names.is_empty() {
-                    let parallel = if names.len() > 1 { " (parallel)" } else { "" };
+                    .find(|r| r.package_name == *name)
+                    .map(|r| r.next_version.to_string())
+                    .unwrap_or_default();
+                println!("  [{}] {} v{} already published, skipping", pm, name, ver);
+            }
+        }
+
+        // Filter out already-published packages
+        let to_publish: HashMap<&str, &PackageRelease> = release_set
+            .iter()
+            .filter(|(name, _)| !already_published.contains(**name))
+            .map(|(&k, &v)| (k, v))
+            .collect();
+
+        if to_publish.is_empty() {
+            println!("  [{}] All packages already published", pm);
+            return Ok(Vec::new());
+        }
+
+        // Show publish order
+        let publish_levels = dependency_levels(&order, packages, &to_publish);
+        if publish_levels.len() > 1 || publish_levels.first().map(|l| l.len() > 1).unwrap_or(false)
+        {
+            println!("  [{}] Publish order:", pm);
+            for (i, level) in publish_levels.iter().enumerate() {
+                if !level.is_empty() {
+                    let parallel = if level.len() > 1 { " (parallel)" } else { "" };
                     println!(
                         "    {} {}{}",
                         console::style(format!("{}.", i + 1)).dim(),
-                        names.join(", "),
+                        level.join(", "),
                         console::style(parallel).dim()
                     );
                 }
             }
         }
 
-        for level in &levels {
+        for level in &publish_levels {
             let results: Vec<Result<()>> = level
                 .par_iter()
                 .filter_map(|name| {
-                    let release = release_set.get(name.as_str())?;
+                    let release = to_publish.get(name.as_str())?;
                     let pkg = packages.iter().find(|p| p.name == *name)?;
                     Some(publish_one(
                         repo_root, dry_run, pkg, release, &opts, pm, dist_tag,
@@ -145,23 +192,6 @@ fn publish_one(
     let pkg_dir = repo_root.join(&pkg.path);
     let label = format!("{} v{}", pkg.name, release.next_version);
     let pm_name = pm.to_string();
-
-    // Check if this exact version is already published
-    let version_str = release.next_version.to_string();
-    let view_cmd_str = format_view_command(&pkg.name, &version_str, opts.registry.as_deref());
-    println!(
-        "  [{}] Checking registry for {}: {}",
-        pm_name,
-        label,
-        console::style(&view_cmd_str).dim()
-    );
-    let (already_published, view_result) =
-        run_version_check(&pkg.name, &version_str, opts.registry.as_deref());
-    println!("    {}", console::style(format!("→ {}", view_result)).dim());
-    if already_published {
-        println!("  [{}] {} already published, skipping", pm_name, label);
-        return Ok(());
-    }
 
     let cmd = pm.publish_command(
         &pkg_dir,
