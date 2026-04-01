@@ -741,7 +741,7 @@ plugins:
             format!(
                 r#"#!/bin/sh
 if [ "$1" = "view" ]; then
-    echo "npm ERR! 404" >&2
+    echo "npm error code E404" >&2
     exit 1
 elif [ "$1" = "--version" ]; then
     echo "10.0.0"
@@ -791,5 +791,112 @@ fi
         publish_marker.exists(),
         "npm publish SHOULD have been called when version is not published:\n{}",
         stdout
+    );
+}
+
+#[test]
+fn test_npm_registry_auth_error_blocks_publish() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches: [main]
+plugins:
+  - name: npm
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    fs::write(root.join("index.js"), "// v1.1").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: new feature"]);
+
+    let fake_bin = dir.path().join("fake-bin");
+    fs::create_dir_all(&fake_bin).unwrap();
+    let publish_marker = dir.path().join("publish-was-called");
+
+    let fake_npm = fake_bin.join("npm");
+    #[cfg(unix)]
+    {
+        // npm view returns E401 (auth error) — should block, not proceed to publish
+        fs::write(
+            &fake_npm,
+            format!(
+                r#"#!/bin/sh
+if [ "$1" = "view" ]; then
+    echo "npm error code E401" >&2
+    echo "npm error Unable to authenticate" >&2
+    exit 1
+elif [ "$1" = "--version" ]; then
+    echo "10.0.0"
+    exit 0
+elif [ "$1" = "publish" ]; then
+    touch "{}"
+    exit 0
+fi
+"#,
+                publish_marker.display()
+            ),
+        )
+        .unwrap();
+
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake_npm, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    {
+        return;
+    }
+
+    let path = format!(
+        "{}:{}",
+        fake_bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let output = super_release_bin()
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should FAIL — auth error is not a 404
+    assert!(
+        !output.status.success(),
+        "Should fail on auth error:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        stderr
+    );
+    // Publish should NOT have been called
+    assert!(
+        !publish_marker.exists(),
+        "npm publish should NOT be called on auth error"
+    );
+    // Error message should mention the registry check failure
+    let combined = format!("{}\n{}", String::from_utf8_lossy(&output.stdout), stderr);
+    assert!(
+        combined.contains("Registry check failed") || combined.contains("E401"),
+        "Should mention registry check failure:\n{}",
+        combined
     );
 }

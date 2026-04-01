@@ -35,6 +35,8 @@ pnpm add -D super-release
 
 The npm package automatically downloads the prebuilt native binary for your platform on first run.
 
+Supported platforms: Linux (x86_64, aarch64, musl/Alpine), macOS (x86_64, Apple Silicon), Windows (x86_64).
+
 Alternatively, build from source:
 
 ```bash
@@ -127,6 +129,7 @@ branches:
     prerelease: beta
   - name: "test-*"
     prerelease: true
+    packages: [ "@acme/core" ]    # only release core on test branches
   - name: "1.x"
     maintenance: true
 
@@ -181,6 +184,17 @@ exits cleanly.
 | `- name: beta`<br>`  prerelease: beta`     | Prerelease (fixed channel)          | `2.0.0-beta.1`, `2.0.0-beta.2`  |
 | `- name: "test-*"`<br>`  prerelease: true` | Prerelease (branch name as channel) | `2.0.0-test-my-feature.1`       |
 | `- name: "1.x"`<br>`  maintenance: true`   | Maintenance                         | `1.5.1`, `1.6.0` (major capped) |
+
+Branches can also filter which packages they release with `packages`:
+
+```yaml
+branches:
+  - name: "test-*"
+    prerelease: true
+    packages: # only release these on test branches
+      - "@acme/core"
+      - "@acme/utils"
+```
 
 **Tag filtering by branch**: Stable branches only see stable tags. Prerelease branches see their own channel's tags plus
 stable tags. Tags on other branches that haven't been merged are ignored.
@@ -253,6 +267,7 @@ plugins:
       tag: next                 # dist-tag (default: auto from prerelease channel)
       publish_args: [ "--otp=123456" ]
       package_manager: yarn     # force specific PM (default: auto-detect)
+      check_registry: true      # check if version exists before publishing (default: true)
 
   - name: exec
     packages: [ "my-rust-lib" ]
@@ -262,12 +277,13 @@ plugins:
       files: [ Cargo.toml, Cargo.lock ]   # include in git commit
 ```
 
-| Plugin      | Prepare                                                      | Publish                                                |
-|-------------|--------------------------------------------------------------|--------------------------------------------------------|
-| `changelog` | Generates/updates changelog per package (parallel)           | --                                                     |
-| `npm`       | Updates `package.json` versions (auto-detects npm/yarn/pnpm) | Publishes packages (parallel within dependency levels) |
-| `exec`      | Runs custom shell command per package                        | Runs custom shell command per package                  |
+| Plugin      | Prepare                                            | Publish                                                |
+|-------------|----------------------------------------------------|--------------------------------------------------------|
+| `changelog` | Generates/updates changelog per package (parallel) | --                                                     |
+| `npm`       | --                                                 | Publishes packages (parallel within dependency levels) |
+| `exec`      | Runs custom shell command per package              | Runs custom shell command per package                  |
 
+Package version bumps (`package.json`) happen automatically before plugins run (part of core).
 Plugins return the files they modified. The core git step stages exactly those files for the commit -- no `git add .`.
 
 Default: `[changelog, npm]`
@@ -291,13 +307,13 @@ Commit message placeholders:
 
 The git step:
 
-1. Stages only files reported by plugins
-2. Also stages any tracked-file changes (for exec commands that can't report files)
-3. Commits (or skips if nothing changed)
-4. Creates annotated tags for each release
-5. Pushes commit + tags if `push: true`
+1. Stages files reported by plugins (changelogs, exec `files`, package.json bumps)
+2. Commits (or skips if nothing changed)
+3. Creates annotated tags for each release
+4. Pushes commit + tags if `push: true`
 
-Tags are idempotent -- existing tags are skipped. Already-published npm packages are detected and skipped on rerun.
+Tags are idempotent -- existing tags are skipped. The npm plugin checks the registry before publishing (`npm view`) and
+skips versions that already exist. Non-404 errors (auth, network) abort the release to prevent partial publishes.
 
 ## Monorepo Structure
 

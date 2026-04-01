@@ -206,6 +206,11 @@
           "items": { "type": "string" },
           "description": "Extra args passed to the publish command"
         },
+        "check_registry": {
+          "type": "boolean",
+          "default": true,
+          "description": "Check the registry before publishing to skip already-published versions. Set to false to always attempt publish."
+        },
         "package_manager": {
           "type": "string",
           "enum": ["npm", "yarn", "pnpm"],

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rayon::prelude::*;
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use super::{Plugin, PluginConfig, PluginContext, parse_options, subprocess};
 use crate::package::{Package, topological_sort};
@@ -9,7 +9,7 @@ use crate::pm::PackageManager;
 use crate::version::PackageRelease;
 
 /// Options for the npm/publish plugin.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct NpmOptions {
     /// Access level for publish ("public" or "restricted"). If unset, npm's default applies.
     #[serde(default)]
@@ -34,6 +34,29 @@ pub struct NpmOptions {
     /// Force a specific package manager (overrides auto-detection).
     #[serde(default)]
     pub package_manager: Option<PackageManager>,
+
+    /// Check the registry before publishing to skip already-published versions.
+    /// Default: true. Set to false to skip the check and always attempt publish.
+    #[serde(default = "default_check_registry")]
+    pub check_registry: bool,
+}
+
+fn default_check_registry() -> bool {
+    true
+}
+
+impl Default for NpmOptions {
+    fn default() -> Self {
+        Self {
+            access: None,
+            registry: None,
+            publish_args: Vec::new(),
+            tag: None,
+            provenance: false,
+            package_manager: None,
+            check_registry: true,
+        }
+    }
 }
 
 pub struct NpmPlugin;
@@ -72,51 +95,70 @@ impl Plugin for NpmPlugin {
         let dry_run = ctx.dry_run;
         let mut errors: Vec<String> = Vec::new();
 
-        // Check all packages against the registry in parallel (read-only, no ordering needed)
-        println!("  [{}] Checking registry for published versions...", pm);
-        let already_published: HashSet<String> = releases
-            .par_iter()
-            .filter_map(|r| {
-                let version_str = r.next_version.to_string();
-                let view_cmd_str =
-                    format_view_command(&r.package_name, &version_str, opts.registry.as_deref());
+        // Check all packages against the registry in parallel
+        let to_publish: HashMap<&str, &PackageRelease> = if opts.check_registry {
+            println!("  [{}] Checking registry for published versions...", pm);
+
+            let check_results: Vec<(&str, VersionCheckResult)> = releases
+                .par_iter()
+                .map(|r| {
+                    let version_str = r.next_version.to_string();
+                    let view_cmd_str = format_view_command(
+                        &r.package_name,
+                        &version_str,
+                        opts.registry.as_deref(),
+                    );
+                    println!(
+                        "    {} {}",
+                        console::style(&r.package_name).bold(),
+                        console::style(&view_cmd_str).dim()
+                    );
+                    let result =
+                        run_version_check(&r.package_name, &version_str, opts.registry.as_deref());
+                    (r.package_name.as_str(), result)
+                })
+                .collect();
+
+            let mut to_publish = HashMap::new();
+            for (name, result) in &check_results {
+                let display = match result {
+                    VersionCheckResult::Published(v) => format!("→ {} (published)", v),
+                    VersionCheckResult::NotFound(v) => format!("→ {} (not found)", v),
+                    VersionCheckResult::Error(e) => format!("→ error: {}", e),
+                };
                 println!(
                     "    {} {}",
-                    console::style(&r.package_name).bold(),
-                    console::style(&view_cmd_str).dim()
+                    console::style(name).bold(),
+                    console::style(&display).dim()
                 );
-                let (published, result) =
-                    run_version_check(&r.package_name, &version_str, opts.registry.as_deref());
-                println!(
-                    "    {} {}",
-                    console::style(&r.package_name).bold(),
-                    console::style(format!("→ {}", result)).dim()
-                );
-                if published {
-                    Some(r.package_name.clone())
-                } else {
-                    None
+
+                match result {
+                    VersionCheckResult::Published(_) => {
+                        let ver = release_set
+                            .get(name)
+                            .map(|r| r.next_version.to_string())
+                            .unwrap_or_default();
+                        println!("  [{}] {} v{} already published, skipping", pm, name, ver);
+                    }
+                    VersionCheckResult::NotFound(_) => {
+                        if let Some(&r) = release_set.get(name) {
+                            to_publish.insert(*name, r);
+                        }
+                    }
+                    VersionCheckResult::Error(e) => {
+                        errors.push(format!("Registry check failed for {}: {}", name, e));
+                    }
                 }
-            })
-            .collect();
-
-        if !already_published.is_empty() {
-            for name in &already_published {
-                let ver = releases
-                    .iter()
-                    .find(|r| r.package_name == *name)
-                    .map(|r| r.next_version.to_string())
-                    .unwrap_or_default();
-                println!("  [{}] {} v{} already published, skipping", pm, name, ver);
             }
-        }
 
-        // Filter out already-published packages
-        let to_publish: HashMap<&str, &PackageRelease> = release_set
-            .iter()
-            .filter(|(name, _)| !already_published.contains(**name))
-            .map(|(&k, &v)| (k, v))
-            .collect();
+            if !errors.is_empty() {
+                anyhow::bail!("Registry check failed:\n  {}", errors.join("\n  "));
+            }
+
+            to_publish
+        } else {
+            release_set.clone()
+        };
 
         if to_publish.is_empty() {
             println!("  [{}] All packages already published", pm);
@@ -244,8 +286,16 @@ fn format_view_command(name: &str, version: &str, registry: Option<&str>) -> Str
     subprocess::format_command(&cmd)
 }
 
-/// Run the npm view check. Returns (is_published, output_text).
-fn run_version_check(name: &str, version: &str, registry: Option<&str>) -> (bool, String) {
+enum VersionCheckResult {
+    /// Version exists on the registry.
+    Published(String),
+    /// 404: version not found (safe to publish).
+    NotFound(String),
+    /// Registry error (auth, network, etc.) — should not proceed.
+    Error(String),
+}
+
+fn run_version_check(name: &str, version: &str, registry: Option<&str>) -> VersionCheckResult {
     let mut cmd = std::process::Command::new("npm");
     cmd.args(["view", &format!("{}@{}", name, version), "version"]);
     cmd.stdout(std::process::Stdio::piped());
@@ -256,19 +306,25 @@ fn run_version_check(name: &str, version: &str, registry: Option<&str>) -> (bool
     }
 
     let Ok(output) = cmd.output() else {
-        return (false, "command failed".into());
+        return VersionCheckResult::Error("failed to run npm view".into());
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let msg = if stderr.is_empty() { stdout } else { stderr };
-        return (false, msg);
+    if output.status.success() {
+        if stdout == version {
+            return VersionCheckResult::Published(stdout);
+        }
+        // Version not matched — treat as not found
+        return VersionCheckResult::NotFound(stdout);
     }
 
-    let published = stdout == version;
-    (published, stdout)
+    if stderr.contains("E404") {
+        VersionCheckResult::NotFound(stderr)
+    } else {
+        VersionCheckResult::Error(stderr)
+    }
 }
 
 fn dependency_levels(
