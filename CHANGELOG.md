@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.11.0] - 2026-04-01
+
+### 🚀 Features
+
+- Add package include filter for branches
 ## [0.10.0] - 2026-03-31
 
 ### 🚀 Features
