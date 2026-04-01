@@ -121,11 +121,30 @@ impl TagIndex {
         Ok(TagIndex { per_package })
     }
 
-    /// Find the latest version tag for a package.
+    /// Find the latest version tag for a package (highest semver).
     pub fn latest_version(&self, package_name: &str) -> Option<(String, Version)> {
         self.per_package
             .get(package_name)?
             .iter()
+            .max_by(|a, b| a.1.cmp(&b.1))
+            .cloned()
+    }
+
+    /// Find the latest prerelease tag for a specific channel.
+    /// Returns `None` if there are no prerelease tags for the channel.
+    pub fn latest_channel_version(
+        &self,
+        package_name: &str,
+        channel: &str,
+    ) -> Option<(String, Version)> {
+        let prefix = format!("{}.", channel);
+        self.per_package
+            .get(package_name)?
+            .iter()
+            .filter(|(_, v)| {
+                let pre = v.pre.as_str();
+                pre == channel || pre.starts_with(&prefix)
+            })
             .max_by(|a, b| a.1.cmp(&b.1))
             .cloned()
     }

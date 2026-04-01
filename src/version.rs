@@ -23,7 +23,10 @@ pub struct PackageRelease {
 }
 
 struct PkgTagInfo {
+    /// The version to use as the base for calculating the next version.
     current_version: Version,
+    /// The OID to stop commit walking at — may differ from the tag that
+    /// produced `current_version` on prerelease branches.
     cutoff_oid: Option<git2::Oid>,
     cutoff_tag: Option<String>,
 }
@@ -48,20 +51,42 @@ pub fn determine_releases(
 
     let tag_infos: Vec<PkgTagInfo> = packages
         .iter()
-        .map(|pkg| match tag_index.latest_version(&pkg.name) {
-            Some((tag_name, ver)) => {
-                let oid = git::tag_to_oid(repo, &tag_name)?;
-                Ok(PkgTagInfo {
-                    current_version: ver,
-                    cutoff_oid: oid,
-                    cutoff_tag: Some(tag_name),
-                })
+        .map(|pkg| {
+            let latest = tag_index.latest_version(&pkg.name);
+
+            // On prerelease branches, the commit-walk cutoff should be the
+            // channel's own tag (the last release on *this* branch), not the
+            // global latest.  The global latest may sit on a different branch
+            // and already include commits we still need to process here.
+            let channel_tag = branch_ctx
+                .prerelease
+                .as_ref()
+                .and_then(|ch| tag_index.latest_channel_version(&pkg.name, ch));
+
+            // Pick the cutoff: prefer channel tag on prerelease branches.
+            let cutoff = channel_tag.as_ref().or(latest.as_ref());
+
+            match cutoff {
+                Some((tag_name, _)) => {
+                    let oid = git::tag_to_oid(repo, tag_name)?;
+                    // Base version is the highest of (global latest, channel tag).
+                    let current_version = match (&latest, &channel_tag) {
+                        (Some((_, lv)), Some((_, cv))) => lv.max(cv).clone(),
+                        (Some((_, v)), None) | (None, Some((_, v))) => v.clone(),
+                        (None, None) => unreachable!(),
+                    };
+                    Ok(PkgTagInfo {
+                        current_version,
+                        cutoff_oid: oid,
+                        cutoff_tag: Some(tag_name.clone()),
+                    })
+                }
+                None => Ok(PkgTagInfo {
+                    current_version: pkg.version.clone(),
+                    cutoff_oid: None,
+                    cutoff_tag: None,
+                }),
             }
-            None => Ok(PkgTagInfo {
-                current_version: pkg.version.clone(),
-                cutoff_oid: None,
-                cutoff_tag: None,
-            }),
         })
         .collect::<Result<Vec<_>>>()?;
 

@@ -1507,3 +1507,118 @@ steps: []
         stdout
     );
 }
+
+/// Regression test: on a prerelease branch, commits merged from another branch
+/// that already have a stable release tag must still be picked up if they are
+/// new to this prerelease channel.
+///
+/// Scenario:
+///   main:       init ── feat ── [v1.1.0] ── fix ── [v1.1.1]
+///   beta:       (branch from init) ── [v1.1.0-beta.1] ── merge main ── ???
+///
+/// The fix commit (v1.1.1 on main) is already covered by the stable tag, but
+/// it is NEW to the beta branch. super-release should detect it and produce
+/// v1.1.2-beta.1.
+#[test]
+fn test_prerelease_picks_up_commits_merged_from_stable() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    // Initial setup on main
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("index.js"), "// v1").unwrap();
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches:
+  - main
+  - name: beta
+    prerelease: beta
+steps:
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    // Feature commit on main → v1.1.0
+    fs::write(root.join("index.js"), "// v1.1").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: new feature"]);
+    git(root, &["tag", "-a", "v1.1.0", "-m", "v1.1.0"]);
+
+    // Create beta branch from current main (at v1.1.0)
+    git(root, &["checkout", "-b", "beta"]);
+
+    // Make a beta-only commit so we get a prerelease tag
+    fs::write(root.join("index.js"), "// beta").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: beta feature"]);
+    git(root, &["tag", "-a", "v1.2.0-beta.1", "-m", "v1.2.0-beta.1"]);
+
+    // Switch back to main and make a fix commit → v1.1.1
+    git(root, &["checkout", "main"]);
+    fs::write(root.join("index.js"), "// v1.1.1 fix").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: important bugfix"]);
+    git(root, &["tag", "-a", "v1.1.1", "-m", "v1.1.1"]);
+
+    // Switch to beta and merge main (bringing in the fix commit)
+    git(root, &["checkout", "beta"]);
+    // Resolve merge conflict by taking main's version
+    let merge = process::Command::new("git")
+        .args(["merge", "main", "-m", "Merge main into beta"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    if !merge.status.success() {
+        // Conflict expected — resolve by accepting main's changes
+        fs::write(root.join("index.js"), "// v1.1.1 fix + beta").unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-m", "Merge main into beta"]);
+    }
+
+    // Now super-release should detect the fix commit as new to beta
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-v")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Failed:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("beta"),
+        "Should produce a prerelease:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("No releases needed"),
+        "Should detect the merged fix commit as new:\n{}",
+        stdout
+    );
+    // Should bump beyond v1.2.0-beta.1 (the existing prerelease)
+    assert!(
+        stdout.contains("beta."),
+        "Should produce a beta prerelease version:\n{}",
+        stdout
+    );
+}
