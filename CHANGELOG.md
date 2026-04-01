@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.1] - 2026-04-01
+
+### 🐛 Bug Fixes
+
+- Make sure not to rewrite the `package.json` files and preserve formatting
 ## [1.0.0] - 2026-04-01
 
 ### 🚀 Features
