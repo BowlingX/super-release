@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.1] - 2026-04-01
+
+### 🐛 Bug Fixes
+
+- Removed invalid `--registry` argument in publish command
+
+### ⚙️ Miscellaneous Tasks
+
+- Added test for npm skip publish case
 ## [0.13.0] - 2026-04-01
 
 ### 🚀 Features
