@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.14.0] - 2026-04-01
+
+### 🚀 Features
+
+- Run publish checks in parallel
 ## [0.13.3] - 2026-04-01
 
 ### 🐛 Bug Fixes
