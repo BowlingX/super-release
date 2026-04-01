@@ -99,3 +99,21 @@ jobs:
           path: |
             dist/${{ matrix.artifact }}.tar.gz*
             dist/${{ matrix.artifact }}.zip*
+
+  e2e:
+    name: E2E Comparison
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24.x"
+      - uses: actions/download-artifact@v8
+        with:
+          name: super-release-linux-x86_64
+          path: dist
+      - name: Extract binary
+        run: tar xzf dist/super-release-linux-x86_64.tar.gz && chmod +x super-release
+      - name: Run E2E comparison
+        run: SUPER_RELEASE=./super-release bash e2e/compare.sh

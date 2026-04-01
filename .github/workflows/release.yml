@@ -1,7 +1,9 @@
 name: Release
 
 on:
-  push:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
     branches: ["main", "master"]
 
 concurrency:
@@ -12,99 +14,11 @@ permissions:
   contents: write
   id-token: write
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test
-
-  build:
-    name: Build (${{ matrix.target }})
-    needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: super-release-linux-x86_64
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            artifact: super-release-linux-x86_64-musl
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            artifact: super-release-linux-aarch64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            artifact: super-release-darwin-x86_64
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            artifact: super-release-darwin-aarch64
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            artifact: super-release-windows-x86_64
-
-    steps:
-      - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.target }}
-
-      - name: Install cross-compilation tools (aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu perl make
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
-
-      - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }} --features vendored-openssl
-
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/super-release dist/super-release
-          cd dist
-          tar czf ${{ matrix.artifact }}.tar.gz super-release
-          shasum -a 256 ${{ matrix.artifact }}.tar.gz > ${{ matrix.artifact }}.tar.gz.sha256
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target/${{ matrix.target }}/release/super-release.exe dist/super-release.exe
-          Compress-Archive -Path dist/super-release.exe -DestinationPath dist/${{ matrix.artifact }}.zip
-          (Get-FileHash dist/${{ matrix.artifact }}.zip -Algorithm SHA256).Hash | Out-File dist/${{ matrix.artifact }}.zip.sha256
-
-      - uses: actions/upload-artifact@v6
-        with:
-          name: ${{ matrix.artifact }}
-          path: |
-            dist/${{ matrix.artifact }}.tar.gz*
-            dist/${{ matrix.artifact }}.zip*
-
   release:
     name: Release
-    needs: build
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -121,6 +35,8 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract super-release binary
         run: |
