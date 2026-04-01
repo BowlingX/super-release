@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.15.0] - 2026-04-01
+
+### 🚀 Features
+
+- Better npm precheck error handling, updated docs
 ## [0.14.0] - 2026-04-01
 
 ### 🚀 Features
