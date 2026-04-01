@@ -69,7 +69,6 @@ impl PackageManager {
         &self,
         pkg_dir: &Path,
         access: Option<&str>,
-        registry: Option<&str>,
         tag: Option<&str>,
         provenance: bool,
         extra_args: &[String],
@@ -96,10 +95,6 @@ impl PackageManager {
 
         if let Some(access) = access {
             cmd.arg("--access").arg(access);
-        }
-
-        if let Some(reg) = registry {
-            cmd.arg("--registry").arg(reg);
         }
 
         if let Some(t) = tag {

@@ -138,7 +138,6 @@ fn publish_one(
     let cmd = pm.publish_command(
         &pkg_dir,
         opts.access.as_deref(),
-        opts.registry.as_deref(),
         dist_tag,
         opts.provenance,
         &opts.publish_args,
