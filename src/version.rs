@@ -252,7 +252,7 @@ fn calculate_next_version(
 fn calculate_stable_version(current: &Version, commits: &[ConventionalCommit]) -> Result<Version> {
     let cliff_release = git_cliff_core::release::Release {
         version: None,
-        commits: crate::plugin::changelog::to_cliff_commits(commits),
+        commits: crate::step::changelog::to_cliff_commits(commits),
         previous: Some(Box::new(git_cliff_core::release::Release {
             version: Some(current.to_string()),
             ..Default::default()

@@ -8,7 +8,7 @@
   "properties": {
     "branches": {
       "description": "Branch configurations for release channels",
-      "type": "array",
+      "type": ["array", "null"],
       "default": ["main", "master"],
       "items": {
         "oneOf": [
@@ -36,44 +36,44 @@
     },
     "packages": {
       "description": "Glob patterns to include. Only matching packages are released. Default: all",
-      "type": "array",
+      "type": ["array", "null"],
       "items": { "type": "string" },
       "examples": [["@acme/*"], ["@acme/core", "@acme/utils"]]
     },
     "exclude": {
       "description": "Glob patterns to exclude from releasing",
-      "type": "array",
+      "type": ["array", "null"],
       "default": [],
       "items": { "type": "string" },
       "examples": [["my-monorepo-root", "@acme/internal-*"]]
     },
     "ignore": {
       "description": "Glob patterns for files to ignore. Commits that only touch ignored files will not trigger a release.",
-      "type": "array",
+      "type": ["array", "null"],
       "default": [],
       "items": { "type": "string" },
       "examples": [["README.md", "docs/**", ".prettierrc", "**/*.md"]]
     },
     "dependencies": {
       "description": "Global file dependency patterns. When a commit changes any matching file, ALL packages are considered affected. Useful for lock files, shared configs, etc.",
-      "type": "array",
+      "type": ["array", "null"],
       "default": [],
       "items": { "type": "string" },
       "examples": [["yarn.lock", "pnpm-lock.yaml", "package.json", ".github/**"]]
     },
-    "plugins": {
-      "description": "Ordered list of plugins to execute",
-      "type": "array",
+    "steps": {
+      "description": "Ordered list of steps to execute",
+      "type": ["array", "null"],
       "default": [
         { "name": "changelog" },
         { "name": "npm" }
       ],
       "items": {
-        "$ref": "#/$defs/pluginConfig"
+        "$ref": "#/$defs/stepConfig"
       }
     },
     "git": {
-      "description": "Git commit and tag behavior after plugins run",
+      "description": "Git commit and tag behavior after steps run",
       "$ref": "#/$defs/gitConfig"
     }
   },
@@ -107,7 +107,7 @@
         }
       }
     },
-    "pluginConfig": {
+    "stepConfig": {
       "type": "object",
       "required": ["name"],
       "additionalProperties": false,
@@ -115,15 +115,20 @@
         "name": {
           "type": "string",
           "enum": ["changelog", "npm", "exec"],
-          "description": "Plugin name"
+          "description": "Step name"
         },
         "packages": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Glob patterns to filter which packages this plugin operates on. Empty = all."
+          "description": "Glob patterns to filter which packages this step operates on. Empty = all."
+        },
+        "branches": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Glob patterns for branch names this step runs on. Empty = all branches."
         },
         "options": {
-          "description": "Plugin-specific options"
+          "description": "Step-specific options"
         }
       },
       "allOf": [

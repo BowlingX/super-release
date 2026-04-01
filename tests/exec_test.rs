@@ -96,7 +96,7 @@ fn test_exec_prepare_dry_run() {
         root.join(".release.yaml"),
         r#"
 branches: [main]
-plugins:
+steps:
   - name: exec
     options:
       prepare_cmd: "echo releasing {name} v{version}"
@@ -126,7 +126,7 @@ fn test_exec_runs_command() {
         root.join(".release.yaml"),
         r#"
 branches: [main]
-plugins:
+steps:
   - name: exec
     options:
       prepare_cmd: "echo {version} > VERSION.txt"
@@ -156,7 +156,7 @@ fn test_exec_package_filter() {
         r#"
 branches: [main]
 exclude: [mono-root]
-plugins:
+steps:
   - name: exec
     packages: ["@test/core"]
     options:
@@ -196,7 +196,7 @@ fn test_exec_multiple_instances() {
         r#"
 branches: [main]
 exclude: [mono-root]
-plugins:
+steps:
   - name: exec
     packages: ["@test/core"]
     options:
@@ -232,7 +232,7 @@ fn test_exec_glob_filter() {
         r#"
 branches: [main]
 exclude: [mono-root]
-plugins:
+steps:
   - name: exec
     packages: ["@test/*"]
     options:
@@ -262,7 +262,7 @@ fn test_exec_publish_phase() {
         root.join(".release.yaml"),
         r#"
 branches: [main]
-plugins:
+steps:
   - name: exec
     options:
       publish_cmd: "echo published {name}@{version} > published.txt"
@@ -301,7 +301,7 @@ edition = "2024"
         root.join(".release.yaml"),
         r#"
 branches: [main]
-plugins:
+steps:
   - name: exec
     options:
       prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"

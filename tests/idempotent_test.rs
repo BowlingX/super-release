@@ -40,7 +40,7 @@ fn setup_single_package(root: &Path) {
         r#"
 branches:
   - main
-plugins:
+steps:
   - name: changelog
 "#,
     )
@@ -89,7 +89,7 @@ branches:
   - main
 exclude:
   - mono-root
-plugins:
+steps:
   - name: changelog
 "#,
     )
@@ -175,7 +175,7 @@ fn test_full_release_single_package() {
 // ──────────────────────────────────────────────────────────────
 
 #[test]
-fn test_only_plugin_files_are_committed() {
+fn test_only_step_files_are_committed() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();
     setup_single_package(root);
@@ -348,7 +348,7 @@ fn test_git_tag_skips_existing() {
         r#"
 branches:
   - main
-plugins: []
+steps: []
 "#,
     )
     .unwrap();
@@ -416,13 +416,13 @@ fn test_git_commit_handles_nothing_to_commit() {
     .unwrap();
     fs::write(root.join("index.js"), "// v1").unwrap();
 
-    // No plugins — core git will still try to commit/tag but no files changed
+    // No steps — core git will still try to commit/tag but no files changed
     fs::write(
         root.join(".release.yaml"),
         r#"
 branches:
   - main
-plugins: []
+steps: []
 "#,
     )
     .unwrap();
@@ -435,7 +435,7 @@ plugins: []
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "feat: new feature"]);
 
-    // Core git will find nothing to commit since no plugins modified files
+    // Core git will find nothing to commit since no steps modified files
     let output = super_release_bin()
         .arg("-C")
         .arg(root.to_str().unwrap())
@@ -605,7 +605,7 @@ fn test_npm_skips_already_published_version() {
         root.join(".release.yaml"),
         r#"
 branches: [main]
-plugins:
+steps:
   - name: npm
 "#,
     )
@@ -714,7 +714,7 @@ fn test_npm_publish_called_when_not_published() {
         root.join(".release.yaml"),
         r#"
 branches: [main]
-plugins:
+steps:
   - name: npm
 "#,
     )
@@ -814,7 +814,7 @@ fn test_npm_registry_auth_error_blocks_publish() {
         root.join(".release.yaml"),
         r#"
 branches: [main]
-plugins:
+steps:
   - name: npm
 "#,
     )

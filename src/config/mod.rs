@@ -1,4 +1,5 @@
 mod branch;
+pub mod schema;
 
 pub use branch::{BranchConfig, BranchContext};
 
@@ -22,9 +23,9 @@ pub struct Config {
     #[serde(default = "default_tag_format_package")]
     pub tag_format_package: String,
 
-    /// Ordered list of plugins to execute.
-    #[serde(default = "default_plugins")]
-    pub plugins: Vec<PluginConfig>,
+    /// Ordered list of steps to execute.
+    #[serde(default = "default_steps")]
+    pub steps: Vec<StepConfig>,
 
     /// Packages to include (glob patterns). Default: all discovered packages.
     #[serde(default)]
@@ -44,7 +45,7 @@ pub struct Config {
     #[serde(default)]
     pub ignore: Vec<String>,
 
-    /// Git commit and tag behavior after plugins run.
+    /// Git commit and tag behavior after steps run.
     #[serde(default)]
     pub git: GitConfig,
 }
@@ -83,18 +84,23 @@ impl Default for GitConfig {
     }
 }
 
-/// Configuration for a single plugin.
+/// Configuration for a single step.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PluginConfig {
-    /// Plugin name (e.g., "changelog", "npm", "git-tag")
+pub struct StepConfig {
+    /// Step name (e.g., "changelog", "npm", "exec")
     pub name: String,
 
-    /// Glob patterns to filter which packages this plugin operates on.
-    /// If empty, the plugin operates on all packages.
+    /// Glob patterns to filter which packages this step operates on.
+    /// If empty, the step operates on all packages.
     #[serde(default)]
     pub packages: Vec<String>,
 
-    /// Plugin-specific options
+    /// Glob patterns for branch names this step runs on.
+    /// If empty, the step runs on all branches.
+    #[serde(default)]
+    pub branches: Vec<String>,
+
+    /// Step-specific options
     #[serde(default)]
     pub options: serde_json::Value,
 }
@@ -114,16 +120,18 @@ fn default_tag_format_package() -> String {
     "{name}/v{version}".into()
 }
 
-fn default_plugins() -> Vec<PluginConfig> {
+fn default_steps() -> Vec<StepConfig> {
     vec![
-        PluginConfig {
+        StepConfig {
             name: "changelog".into(),
             packages: Vec::new(),
+            branches: Vec::new(),
             options: serde_json::Value::Null,
         },
-        PluginConfig {
+        StepConfig {
             name: "npm".into(),
             packages: Vec::new(),
+            branches: Vec::new(),
             options: serde_json::Value::Null,
         },
     ]
@@ -135,7 +143,7 @@ impl Default for Config {
             branches: default_branches(),
             tag_format: default_tag_format(),
             tag_format_package: default_tag_format_package(),
-            plugins: default_plugins(),
+            steps: default_steps(),
             packages: None,
             exclude: Vec::new(),
             dependencies: Vec::new(),
@@ -145,38 +153,15 @@ impl Default for Config {
     }
 }
 
-/// Load configuration. If `path` is a file, load it directly.
-/// If it's a directory, search for known config filenames.
+/// Load configuration from a file or directory.
+/// Searches for `.release.yaml`, `.release.json`, or `.release.jsonc`.
+/// Returns defaults if no config file is found.
 pub fn load_config(path: &Path) -> Result<Config> {
-    if path.is_file() {
-        let content =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let config: Config = serde_saphyr::from_str(&content)
-            .with_context(|| format!("parsing config file: {}", path.display()))?;
-        return Ok(config);
+    match schema::find_config(path)? {
+        Some((content, file_path, format)) => schema::parse_config(&content, format)
+            .with_context(|| format!("parsing config file: {}", file_path.display())),
+        None => Ok(Config::default()),
     }
-
-    let candidates = [
-        ".release.yaml",
-        ".release.yml",
-        ".super-release.yaml",
-        ".super-release.yml",
-    ];
-
-    for candidate in &candidates {
-        let file = path.join(candidate);
-        match std::fs::read_to_string(&file) {
-            Ok(content) => {
-                let config: Config = serde_saphyr::from_str(&content)
-                    .with_context(|| format!("parsing config file: {}", file.display()))?;
-                return Ok(config);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(anyhow::anyhow!("reading {}: {}", file.display(), e)),
-        }
-    }
-
-    Ok(Config::default())
 }
 
 /// Resolve the repository root from a starting path.
@@ -261,7 +246,7 @@ mod tests {
         assert_eq!(config.branches[1].name(), "master");
         assert_eq!(config.tag_format, "v{version}");
         assert_eq!(config.tag_format_package, "{name}/v{version}");
-        assert_eq!(config.plugins.len(), 2);
+        assert_eq!(config.steps.len(), 2);
     }
 
     #[test]
@@ -349,7 +334,7 @@ branches:
   - main
   - name: beta
     prerelease: beta
-plugins:
+steps:
   - name: changelog
 "#;
         let config: Config = serde_saphyr::from_str(yaml).unwrap();

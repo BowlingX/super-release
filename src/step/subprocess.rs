@@ -33,12 +33,12 @@ pub fn format_command(cmd: &Command) -> String {
 /// Options for `run_command`.
 pub struct RunOptions<'a> {
     pub label: &'a str,
-    pub plugin_name: &'a str,
+    pub step_name: &'a str,
 }
 
 /// Run a command with live output streaming:
 /// - TTY: per-task spinner via MultiProgress (safe for concurrent use)
-/// - CI (no TTY): all lines printed as they arrive with plugin prefix
+/// - CI (no TTY): all lines printed as they arrive with step prefix
 /// - On error: last 20 lines for debugging (TTY only)
 pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -46,7 +46,7 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
     let mut child = cmd.spawn().with_context(|| {
         format!(
             "[{}] Failed to spawn command for {}",
-            opts.plugin_name, opts.label
+            opts.step_name, opts.label
         )
     })?;
 
@@ -60,7 +60,7 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
                 .template("  {spinner:.cyan} [{prefix}] {msg}")
                 .unwrap(),
         );
-        s.set_prefix(opts.plugin_name.to_string());
+        s.set_prefix(opts.step_name.to_string());
         s.set_message(format!("{}...", opts.label));
         s.enable_steady_tick(Duration::from_millis(80));
         Some(s)
@@ -71,7 +71,7 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
     let stdout = child.stdout.take();
     let output_clone = Arc::clone(&all_output);
     let spinner_clone = spinner.clone();
-    let plugin_name = opts.plugin_name.to_string();
+    let step_name = opts.step_name.to_string();
     let is_tty_clone = is_tty;
 
     let stdout_handle = std::thread::spawn(move || {
@@ -80,17 +80,17 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
             &output_clone,
             spinner_clone.as_ref(),
             is_tty_clone,
-            &plugin_name,
+            &step_name,
         );
     });
 
-    let plugin_name = opts.plugin_name.to_string();
+    let step_name = opts.step_name.to_string();
     stream_lines(
         child.stderr.take(),
         &all_output,
         spinner.as_ref(),
         is_tty,
-        &plugin_name,
+        &step_name,
     );
 
     stdout_handle.join().ok();
@@ -113,7 +113,7 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
             let tail: Vec<&str> = tail.into_iter().rev().collect();
             MULTI.println(format!(
                 "  [{}] {} output:\n{}",
-                style(opts.plugin_name).red(),
+                style(opts.step_name).red(),
                 opts.label,
                 tail.iter()
                     .map(|l| format!("    {}", style(l).dim()))
@@ -124,7 +124,7 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
 
         anyhow::bail!(
             "[{}] Command failed for {} (exit code: {})",
-            opts.plugin_name,
+            opts.step_name,
             opts.label,
             status
         );
@@ -138,7 +138,7 @@ fn stream_lines<R: std::io::Read>(
     output: &Arc<Mutex<Vec<String>>>,
     spinner: Option<&ProgressBar>,
     is_tty: bool,
-    plugin_name: &str,
+    step_name: &str,
 ) {
     let Some(r) = reader else { return };
     for line in BufReader::new(r).lines() {
@@ -149,7 +149,7 @@ fn stream_lines<R: std::io::Read>(
                 s.set_message(truncate(&line, 60));
             }
         } else {
-            println!("    [{}] {}", style(plugin_name).dim(), line);
+            println!("    [{}] {}", style(step_name).dim(), line);
         }
 
         output.lock().unwrap().push(line);

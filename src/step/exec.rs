@@ -3,11 +3,11 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::process::Command;
 
-use super::{Plugin, PluginConfig, PluginContext, parse_options, subprocess};
+use super::{Step, StepConfig, StepContext, parse_options, subprocess};
 use crate::package::Package;
 use crate::version::PackageRelease;
 
-/// Options for the exec plugin.
+/// Options for the exec step.
 ///
 /// Runs arbitrary shell commands during prepare and/or publish phases.
 /// Commands support placeholders:
@@ -30,17 +30,17 @@ pub struct ExecOptions {
     pub files: Vec<String>,
 }
 
-pub struct ExecPlugin;
+pub struct ExecStep;
 
-impl Plugin for ExecPlugin {
+impl Step for ExecStep {
     fn name(&self) -> &str {
         "exec"
     }
 
     fn prepare(
         &self,
-        ctx: &PluginContext,
-        config: &PluginConfig,
+        ctx: &StepContext,
+        config: &StepConfig,
         _packages: &[Package],
         releases: &[PackageRelease],
     ) -> Result<Vec<std::path::PathBuf>> {
@@ -54,8 +54,8 @@ impl Plugin for ExecPlugin {
 
     fn publish(
         &self,
-        ctx: &PluginContext,
-        config: &PluginConfig,
+        ctx: &StepContext,
+        config: &StepConfig,
         _packages: &[Package],
         releases: &[PackageRelease],
     ) -> Result<Vec<std::path::PathBuf>> {
@@ -82,13 +82,13 @@ fn resolve_files(patterns: &[String], releases: &[PackageRelease]) -> Vec<std::p
 }
 
 fn run_for_releases(
-    ctx: &PluginContext,
+    ctx: &StepContext,
     cmd_template: &str,
     releases: &[PackageRelease],
     phase: &str,
 ) -> Result<()> {
     let channel = ctx.branch.prerelease.as_deref().unwrap_or("");
-    let plugin_name = format!("exec:{}", phase);
+    let step_name = format!("exec:{}", phase);
     let repo_root = ctx.repo_root;
     let dry_run = ctx.dry_run;
 
@@ -101,7 +101,7 @@ fn run_for_releases(
                 .replace("{channel}", channel);
 
             if dry_run {
-                println!("  [{}] Would run: {}", plugin_name, cmd_str);
+                println!("  [{}] Would run: {}", step_name, cmd_str);
                 println!(
                     "    {}",
                     console::style(format!("in {}", repo_root.display())).dim()
@@ -109,7 +109,7 @@ fn run_for_releases(
                 return Ok(());
             }
 
-            println!("  [{}] Running: {}", plugin_name, cmd_str);
+            println!("  [{}] Running: {}", step_name, cmd_str);
             println!(
                 "    {}",
                 console::style(format!("in {}", repo_root.display())).dim()
@@ -122,7 +122,7 @@ fn run_for_releases(
                 cmd,
                 &subprocess::RunOptions {
                     label: &cmd_str,
-                    plugin_name: &plugin_name,
+                    step_name: &step_name,
                 },
             )
         })

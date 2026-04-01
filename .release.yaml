@@ -7,7 +7,7 @@ branches:
 
 tag_format: "v{version}"
 
-plugins:
+steps:
   - name: changelog
   - name: npm
     options:

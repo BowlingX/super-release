@@ -2,9 +2,9 @@ mod commit;
 mod config;
 mod git;
 mod package;
-mod plugin;
 mod pm;
 mod resolver;
+mod step;
 mod version;
 
 use anyhow::{Context, Result};
@@ -53,6 +53,10 @@ struct Cli {
     /// Verbose output
     #[arg(long, short = 'v')]
     verbose: bool,
+
+    /// Skip config file validation against the JSON schema
+    #[arg(long)]
+    dangerously_skip_config_check: bool,
 }
 
 /// Print and immediately flush to ensure output is visible.
@@ -69,11 +73,31 @@ fn main() -> Result<()> {
     let (repo_root, repo) =
         config::find_repo_root(&cli.path).context("Could not find a git repository")?;
 
-    let cfg = if let Some(config_path) = &cli.config {
-        config::load_config(config_path)?
-    } else {
-        config::load_config(&repo_root)?
-    };
+    let config_source = &cli.config.clone().unwrap_or(repo_root.clone());
+
+    // Validate config against schema before loading
+    if !cli.dangerously_skip_config_check
+        && let Some((content, file_path, format)) = config::schema::find_config(config_source)?
+    {
+        let errors = config::schema::validate(&content, format);
+        if !errors.is_empty() {
+            eprintln!(
+                "{} Invalid config file: {}",
+                style("error:").red().bold(),
+                file_path.display()
+            );
+            for err in &errors {
+                eprintln!("  {} {}", style("•").red(), err);
+            }
+            eprintln!(
+                "\n  Use {} to bypass this check.",
+                style("--dangerously-skip-config-check").yellow()
+            );
+            std::process::exit(1);
+        }
+    }
+
+    let cfg = config::load_config(config_source)?;
 
     let quiet = cli.show_next_version;
 
@@ -277,43 +301,61 @@ fn main() -> Result<()> {
     }
     printfl!();
 
-    // Core: bump package manifest versions before plugins run
+    // Core: bump package manifest versions before steps run
     printfl!("{} Bumping package versions", style(">>").bold().blue());
     let mut modified_files =
         pkg_resolver.bump_versions(&repo_root, &packages, &releases, cli.dry_run)?;
 
-    let plugin_ctx = plugin::PluginContext {
+    let step_ctx = step::StepContext {
         repo_root: &repo_root,
         dry_run: cli.dry_run,
         branch: &branch_ctx,
     };
 
-    for plugin_cfg in &cfg.plugins {
-        let p = match plugin::create_plugin(&plugin_cfg.name) {
+    for step_cfg in &cfg.steps {
+        // Skip step if it's not configured for this branch
+        if !step_cfg.branches.is_empty()
+            && !step_cfg
+                .branches
+                .iter()
+                .any(|pat| config::glob_match(pat, &branch_ctx.branch_name))
+        {
+            if cli.verbose || cli.dry_run {
+                printfl!(
+                    "{} Skipping step '{}' (not configured for branch '{}')",
+                    style(">>").dim(),
+                    step_cfg.name,
+                    branch_ctx.branch_name
+                );
+            }
+            continue;
+        }
+
+        let p = match step::create_step(&step_cfg.name) {
             Some(p) => p,
             None => {
                 eprintln!(
-                    "{} Unknown plugin: {}",
+                    "{} Unknown step: {}",
                     style("warning:").yellow().bold(),
-                    plugin_cfg.name
+                    step_cfg.name
                 );
                 continue;
             }
         };
 
         printfl!(
-            "{} Running plugin: {}",
+            "{} Running step: {}",
             style(">>").bold().blue(),
             style(p.name()).bold()
         );
 
-        let (filtered_packages, filtered_releases) = if plugin_cfg.packages.is_empty() {
+        let (filtered_packages, filtered_releases) = if step_cfg.packages.is_empty() {
             (packages.clone(), releases.clone())
         } else {
             let fp: Vec<_> = packages
                 .iter()
                 .filter(|p| {
-                    plugin_cfg
+                    step_cfg
                         .packages
                         .iter()
                         .any(|pat| config::glob_match(pat, &p.name))
@@ -323,7 +365,7 @@ fn main() -> Result<()> {
             let fr: Vec<_> = releases
                 .iter()
                 .filter(|r| {
-                    plugin_cfg
+                    step_cfg
                         .packages
                         .iter()
                         .any(|pat| config::glob_match(pat, &r.package_name))
@@ -334,7 +376,7 @@ fn main() -> Result<()> {
                 let skipped = releases.len() - fr.len();
                 if skipped > 0 {
                     printfl!(
-                        "  {} Filtered to {} of {} release(s) by plugin packages filter",
+                        "  {} Filtered to {} of {} release(s) by step packages filter",
                         style(">>").dim(),
                         fr.len(),
                         releases.len()
@@ -344,16 +386,16 @@ fn main() -> Result<()> {
             (fp, fr)
         };
 
-        p.verify(&plugin_ctx, plugin_cfg)?;
+        p.verify(&step_ctx, step_cfg)?;
         modified_files.extend(p.prepare(
-            &plugin_ctx,
-            plugin_cfg,
+            &step_ctx,
+            step_cfg,
             &filtered_packages,
             &filtered_releases,
         )?);
         modified_files.extend(p.publish(
-            &plugin_ctx,
-            plugin_cfg,
+            &step_ctx,
+            step_cfg,
             &filtered_packages,
             &filtered_releases,
         )?);
@@ -444,7 +486,7 @@ fn finalize_git(
         return Ok(());
     }
 
-    // Stage only the files that plugins reported as modified
+    // Stage only the files that steps reported as modified
     if !modified_files.is_empty() {
         let mut add_cmd = Command::new("git");
         add_cmd.arg("add").current_dir(repo_root);

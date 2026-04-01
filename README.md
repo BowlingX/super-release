@@ -14,7 +14,7 @@ update `package.json` files, publish to npm, and create git tags -- across all p
 - Changelog generation powered by [git-cliff](https://git-cliff.org/)
 - Auto-detects package manager (npm, yarn, pnpm)
 - Configurable tag format templates
-- Plugin system: changelog, npm, exec (extensible)
+- Build in steps: changelog, npm, exec
 - Global file dependencies and ignore patterns
 - Idempotent: safe to rerun after partial failures
 - Dry-run mode with pretty, truncated output
@@ -72,6 +72,8 @@ Options:
       --show-next-version      Print the next version and exit
   -p, --package <PACKAGE>      Filter to a specific package (for --show-next-version)
   -v, --verbose                Verbose output
+      --dangerously-skip-config-check
+                               Skip config file validation against the JSON schema
   -h, --help                   Print help
   -V, --version                Print version
 ```
@@ -95,7 +97,7 @@ In monorepos, use `--package` to select which package: `super-release --show-nex
 4. **Associate commits to packages** -- maps changed files to their owning package (respects `dependencies` and `ignore`
    config)
 5. **Calculate versions** -- determines bump levels from conventional commits
-6. **Run plugins** -- changelog, npm publish, exec commands
+6. **Run steps** -- changelog, npm publish, exec commands
 7. **Git finalize** -- commits modified files, creates tags, optionally pushes
 
 ## Conventional Commits
@@ -110,13 +112,23 @@ In monorepos, use `--package` to select which package: `super-release --show-nex
 
 ## Configuration
 
-Create a `.release.yaml` (or `.release.yml`, `.super-release.yaml`) in your repository root. All fields are optional
-with sensible defaults.
+Create a `.release.yaml` in your repository root. JSON (`.release.json`) and JSONC (`.release.jsonc`) are also
+supported. All fields are optional with sensible defaults.
 
-A [JSON Schema](schema.json) is available for editor autocompletion:
+The config is validated against a bundled [JSON Schema](schema.json) at startup. Use `--dangerously-skip-config-check`
+to bypass validation.
+
+For editor autocompletion:
 
 ```yaml
 # yaml-language-server: $schema=https://raw.githubusercontent.com/bowlingx/super-release/main/schema.json
+```
+
+```jsonc
+// .release.jsonc
+{
+  "$schema": "https://raw.githubusercontent.com/bowlingx/super-release/main/schema.json"
+}
 ```
 
 ### Full Example
@@ -153,7 +165,7 @@ ignore:
   - "docs/**"
   - "**/*.md"
 
-plugins:
+steps:
   - name: changelog
   - name: npm
     options:
@@ -247,12 +259,13 @@ exclude:
   - my-monorepo-root
 ```
 
-#### `plugins`
+#### `steps`
 
-Ordered list of plugins. Each plugin has a `name`, optional `packages` filter (glob), and `options`.
+Ordered list of steps. Each step has a `name`, optional `packages` and `branches` filters (glob patterns), and
+`options`.
 
 ```yaml
-plugins:
+steps:
   - name: changelog
     options:
       filename: CHANGELOG.md
@@ -260,6 +273,7 @@ plugins:
 
   - name: npm
     packages: [ "@acme/*" ]       # only publish @acme packages
+    branches: [ "main", "beta" ]  # only run on main and beta branches
     options:
       access: public
       provenance: true
@@ -277,20 +291,27 @@ plugins:
       files: [ Cargo.toml, Cargo.lock ]   # include in git commit
 ```
 
-| Plugin      | Prepare                                            | Publish                                                |
+Each step can be scoped:
+
+- **`packages`** -- glob patterns to filter which packages the step operates on. If empty, the step runs for all
+  packages. For example, `packages: ["@acme/*"]` limits an npm publish step to only `@acme`-scoped packages.
+- **`branches`** -- glob patterns for branch names this step runs on. If empty, the step runs on all branches.
+  For example, `branches: ["main"]` ensures a step only runs on the main branch.
+
+| Step        | Prepare                                            | Publish                                                |
 |-------------|----------------------------------------------------|--------------------------------------------------------|
 | `changelog` | Generates/updates changelog per package (parallel) | --                                                     |
 | `npm`       | --                                                 | Publishes packages (parallel within dependency levels) |
 | `exec`      | Runs custom shell command per package              | Runs custom shell command per package                  |
 
-Package version bumps (`package.json`) happen automatically before plugins run (part of core).
-Plugins return the files they modified. The core git step stages exactly those files for the commit -- no `git add .`.
+Package version bumps (`package.json`) happen automatically before steps run (part of core).
+Steps return the files they modified. The core git step stages exactly those files for the commit -- no `git add .`.
 
 Default: `[changelog, npm]`
 
 #### `git`
 
-Core git behavior after all plugins run. Not a plugin -- always runs.
+Core git behavior after all steps run. Not a step -- always runs.
 
 ```yaml
 git:
@@ -307,12 +328,12 @@ Commit message placeholders:
 
 The git step:
 
-1. Stages files reported by plugins (changelogs, exec `files`, package.json bumps)
+1. Stages files reported by steps (changelogs, exec `files`, package.json bumps)
 2. Commits (or skips if nothing changed)
 3. Creates annotated tags for each release
 4. Pushes commit + tags if `push: true`
 
-Tags are idempotent -- existing tags are skipped. The npm plugin checks the registry before publishing (`npm view`) and
+Tags are idempotent -- existing tags are skipped. The npm step checks the registry before publishing (`npm view`) and
 skips versions that already exist. Non-404 errors (auth, network) abort the release to prevent partial publishes.
 
 ## Monorepo Structure

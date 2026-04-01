@@ -11,7 +11,7 @@ use git_cliff_core::commit::Commit as CliffCommit;
 use git_cliff_core::config::Config as CliffConfig;
 use git_cliff_core::release::Release as CliffRelease;
 
-use super::{Plugin, PluginConfig, PluginContext, parse_options};
+use super::{Step, StepConfig, StepContext, parse_options};
 use crate::commit::ConventionalCommit;
 use crate::package::Package;
 use crate::version::PackageRelease;
@@ -19,7 +19,7 @@ use crate::version::PackageRelease;
 static CLIFF_CONFIG: LazyLock<CliffConfig> =
     LazyLock::new(|| "".parse().expect("Failed to load git-cliff default config"));
 
-/// Options for the changelog plugin.
+/// Options for the changelog step.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ChangelogOptions {
     /// Output filename (default: "CHANGELOG.md")
@@ -48,17 +48,17 @@ fn default_preview_lines() -> usize {
     20
 }
 
-pub struct ChangelogPlugin;
+pub struct ChangelogStep;
 
-impl Plugin for ChangelogPlugin {
+impl Step for ChangelogStep {
     fn name(&self) -> &str {
         "changelog"
     }
 
     fn prepare(
         &self,
-        ctx: &PluginContext,
-        config: &PluginConfig,
+        ctx: &StepContext,
+        config: &StepConfig,
         packages: &[Package],
         releases: &[PackageRelease],
     ) -> Result<Vec<PathBuf>> {

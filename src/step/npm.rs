@@ -3,12 +3,12 @@ use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::{Plugin, PluginConfig, PluginContext, parse_options, subprocess};
+use super::{Step, StepConfig, StepContext, parse_options, subprocess};
 use crate::package::{Package, topological_sort};
 use crate::pm::PackageManager;
 use crate::version::PackageRelease;
 
-/// Options for the npm/publish plugin.
+/// Options for the npm/publish step.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NpmOptions {
     /// Access level for publish ("public" or "restricted"). If unset, npm's default applies.
@@ -59,14 +59,14 @@ impl Default for NpmOptions {
     }
 }
 
-pub struct NpmPlugin;
+pub struct NpmStep;
 
-impl Plugin for NpmPlugin {
+impl Step for NpmStep {
     fn name(&self) -> &str {
         "npm"
     }
 
-    fn verify(&self, ctx: &PluginContext, config: &PluginConfig) -> Result<()> {
+    fn verify(&self, ctx: &StepContext, config: &StepConfig) -> Result<()> {
         if ctx.dry_run {
             return Ok(());
         }
@@ -76,8 +76,8 @@ impl Plugin for NpmPlugin {
 
     fn publish(
         &self,
-        ctx: &PluginContext,
-        config: &PluginConfig,
+        ctx: &StepContext,
+        config: &StepConfig,
         packages: &[Package],
         releases: &[PackageRelease],
     ) -> Result<Vec<std::path::PathBuf>> {
@@ -215,7 +215,7 @@ impl Plugin for NpmPlugin {
     }
 }
 
-fn resolve_pm(ctx: &PluginContext, opts: &NpmOptions) -> Result<PackageManager> {
+fn resolve_pm(ctx: &StepContext, opts: &NpmOptions) -> Result<PackageManager> {
     match opts.package_manager {
         Some(pm) => Ok(pm),
         None => PackageManager::detect(ctx.repo_root),
@@ -271,7 +271,7 @@ fn publish_one(
         cmd,
         &subprocess::RunOptions {
             label: &label,
-            plugin_name: &pm_name,
+            step_name: &pm_name,
         },
     )
 }

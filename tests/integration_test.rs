@@ -145,7 +145,7 @@ fn test_dry_run_monorepo() {
         r#"
 branches:
   - main
-plugins:
+steps:
   - name: changelog
   - name: npm
 "#,
@@ -301,7 +301,7 @@ branches:
   - main
 packages:
   - "@myorg/core"
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -482,7 +482,7 @@ fn test_custom_tag_format_package() {
         root.join(".release.yaml"),
         r#"
 tag_format_package: "{name}@{version}"
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -540,7 +540,7 @@ branches:
   - main
   - name: beta
     prerelease: beta
-plugins:
+steps:
   - name: changelog
 "#,
     )
@@ -587,7 +587,7 @@ fn test_prerelease_increment() {
 branches:
   - name: beta
     prerelease: beta
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -633,7 +633,7 @@ branches:
   - main
   - name: "1.x"
     maintenance: true
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -679,7 +679,7 @@ fn test_maintenance_branch_caps_breaking_change() {
 branches:
   - name: "1.x"
     maintenance: true
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -741,7 +741,7 @@ branches:
   - main
   - name: "test-*"
     prerelease: true
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -795,7 +795,7 @@ branches:
     prerelease: beta
   - name: "test-*"
     prerelease: true
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -858,7 +858,7 @@ branches:
   - main
   - name: "test-*"
     prerelease: true
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -895,7 +895,7 @@ fn test_unconfigured_branch_skips_release() {
 branches:
   - name: "test-*"
     prerelease: true
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -942,7 +942,7 @@ branches:
   - main
   - name: "test-*"
     prerelease: true
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -1008,7 +1008,7 @@ branches:
   - main
   - name: "test-*"
     prerelease: true
-plugins:
+steps:
 "#,
     )
     .unwrap();
@@ -1082,7 +1082,7 @@ fn test_behind_remote_blocks_release() {
     )
     .unwrap();
     fs::write(local.join("index.js"), "// v1").unwrap();
-    fs::write(local.join(".release.yaml"), "branches: [main]\nplugins:\n").unwrap();
+    fs::write(local.join(".release.yaml"), "branches: [main]\nsteps:\n").unwrap();
 
     git(local, &["add", "."]);
     git(local, &["commit", "-m", "chore: init"]);
@@ -1161,7 +1161,7 @@ fn test_behind_remote_skipped_in_dry_run() {
     )
     .unwrap();
     fs::write(local.join("index.js"), "// v1").unwrap();
-    fs::write(local.join(".release.yaml"), "branches: [main]\nplugins:\n").unwrap();
+    fs::write(local.join(".release.yaml"), "branches: [main]\nsteps:\n").unwrap();
 
     git(local, &["add", "."]);
     git(local, &["commit", "-m", "chore: init"]);
@@ -1242,7 +1242,7 @@ branches: [main]
 exclude: [mono-root]
 dependencies:
   - yarn.lock
-plugins: []
+steps: []
 "#,
     )
     .unwrap();
@@ -1317,7 +1317,7 @@ fn test_global_dependency_not_triggered_without_config() {
         r#"
 branches: [main]
 exclude: [mono-root]
-plugins: []
+steps: []
 "#,
     )
     .unwrap();
@@ -1373,7 +1373,7 @@ branches: [main]
 exclude: [mono-root]
 dependencies:
   - ".github/**"
-plugins: []
+steps: []
 "#,
     )
     .unwrap();
@@ -1429,7 +1429,7 @@ ignore:
   - "README.md"
   - "docs/**"
   - "**/*.md"
-plugins: []
+steps: []
 "#,
     )
     .unwrap();
@@ -1477,7 +1477,7 @@ fn test_ignore_mixed_with_real_changes() {
 branches: [main]
 ignore:
   - "README.md"
-plugins: []
+steps: []
 "#,
     )
     .unwrap();

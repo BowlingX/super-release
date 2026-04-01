@@ -90,7 +90,7 @@ branches:
   - main
 exclude:
   - test-monorepo
-plugins:
+steps:
   - name: changelog
   - name: npm
     {}
