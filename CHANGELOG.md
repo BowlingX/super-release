@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.3] - 2026-04-01
+
+### 🐛 Bug Fixes
+
+- Make sure to handle prerelease cutoff correctly
 ## [1.0.2] - 2026-04-01
 
 ### 🐛 Bug Fixes

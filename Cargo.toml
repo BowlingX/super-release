@@ -1,6 +1,6 @@
 [package]
 name = "super-release"
-version = "1.0.2"
+version = "1.0.3"
 edition = "2024"
 description = "A fast semantic-release alternative for monorepos, written in Rust"
 
