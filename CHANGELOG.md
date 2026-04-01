@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.3] - 2026-04-01
+
+### 🐛 Bug Fixes
+
+- Restructured ci/cd
+
+### ⚙️ Miscellaneous Tasks
+
+- Debug
+- Debug
+- Debug
+- Force `main` as branch
+- Force `main` as branch
+- Run tests in parallel, fixed output, stream results
+- Add failure outputs
+- Enforce CI=false on gh action runners as well
 ## [1.1.2] - 2026-04-01
 
 ### 🐛 Bug Fixes
