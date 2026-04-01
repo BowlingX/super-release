@@ -370,15 +370,7 @@ fn calculate_maintenance_version(
             }
         }
         // `1.x` — lock major, minor bumps are allowed but major bumps are capped.
-        Some(crate::config::MaintenanceRange::Major(_)) => {
-            if next.major > current.major {
-                Ok(Version::new(current.major, current.minor + 1, 0))
-            } else {
-                Ok(next)
-            }
-        }
-        // No parseable range — default to capping major only (legacy).
-        None => {
+        Some(crate::config::MaintenanceRange::Major(_)) | None => {
             if next.major > current.major {
                 Ok(Version::new(current.major, current.minor + 1, 0))
             } else {

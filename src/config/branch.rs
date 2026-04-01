@@ -165,7 +165,15 @@ pub fn resolve_branch_context(
             let maintenance_range = if maintenance {
                 // Prefer explicit `range` config, fall back to branch name.
                 let range_source = bc.range().unwrap_or(&branch_name);
-                parse_maintenance_range(range_source)
+                match parse_maintenance_range(range_source) {
+                    Some(r) => Some(r),
+                    None => anyhow::bail!(
+                        "Maintenance branch '{}' has no valid range. \
+                         Set 'range' explicitly (e.g. \"1.x\" or \"1.5.x\") \
+                         or use a branch name like '1.x'.",
+                        branch_name
+                    ),
+                }
             } else {
                 None
             };
