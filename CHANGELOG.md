@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0] - 2026-04-01
+
+### 🚀 Features
+
+- Added more maintenance / channel tests and adjustments, added docs for different scenarios
+- Added version collision tests / handling
 ## [1.0.3] - 2026-04-01
 
 ### 🐛 Bug Fixes
