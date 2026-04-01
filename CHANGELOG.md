@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.12.0] - 2026-04-01
+
+### 🚀 Features
+
+- Show multi progress for concurrent builds
 ## [0.11.0] - 2026-04-01
 
 ### 🚀 Features
