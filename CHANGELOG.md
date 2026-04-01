@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.13.2] - 2026-04-01
+
+### 🐛 Bug Fixes
+
+- Made output clearer
 ## [0.13.1] - 2026-04-01
 
 ### 🐛 Bug Fixes
