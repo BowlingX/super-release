@@ -13,8 +13,11 @@ Verifies that super-release produces the same version bumps as semantic-release 
 # Build super-release
 cargo build --release
 
-# Run comparison
+# Run comparison (default: 4 tests in parallel)
 SUPER_RELEASE=./target/release/super-release bash e2e/compare.sh
+
+# Run with more parallelism
+PARALLEL=8 SUPER_RELEASE=./target/release/super-release bash e2e/compare.sh
 ```
 
 ## What it tests
