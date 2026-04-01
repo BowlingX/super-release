@@ -67,6 +67,22 @@ macro_rules! printfl {
     }};
 }
 
+/// Execute a block or print a line only in verbose mode.
+///
+/// Usage:
+///   verbosefl!(flag, "format {}", arg);        // single print
+///   verbosefl!(flag);                           // empty line
+///   verbosefl!(flag, { ... });                  // arbitrary block
+macro_rules! verbosefl {
+    ($verbose:expr) => {{ if $verbose { printfl!(); } }};
+    ($verbose:expr, { $($body:tt)* }) => {{
+        if $verbose { $($body)* }
+    }};
+    ($verbose:expr, $($arg:tt)*) => {{
+        if $verbose { printfl!($($arg)*); }
+    }};
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -102,6 +118,7 @@ fn main() -> Result<()> {
     };
 
     let quiet = cli.show_next_version;
+    let verbose_mode = !quiet && (cli.verbose || cli.dry_run);
 
     if !quiet {
         if cli.dry_run {
@@ -124,14 +141,15 @@ fn main() -> Result<()> {
     if let Some(ref include) = cfg.packages {
         let before = packages.len();
         packages.retain(|p| include.iter().any(|pat| config::glob_match(pat, &p.name)));
-        if !quiet && (cli.verbose || cli.dry_run) && packages.len() < before {
-            let excluded = before - packages.len();
-            printfl!(
-                "{} Filtered {} package(s) by 'packages' include patterns",
-                style(">>").dim(),
-                excluded
-            );
-        }
+        verbosefl!(verbose_mode, {
+            if packages.len() < before {
+                printfl!(
+                    "{} Filtered {} package(s) by 'packages' include patterns",
+                    style(">>").dim(),
+                    before - packages.len()
+                );
+            }
+        });
     }
 
     if !cfg.exclude.is_empty() {
@@ -141,14 +159,15 @@ fn main() -> Result<()> {
                 .iter()
                 .any(|pat| config::glob_match(pat, &p.name))
         });
-        if !quiet && (cli.verbose || cli.dry_run) && packages.len() < before {
-            let excluded = before - packages.len();
-            printfl!(
-                "{} Excluded {} package(s) by 'exclude' patterns",
-                style(">>").dim(),
-                excluded
-            );
-        }
+        verbosefl!(verbose_mode, {
+            if packages.len() < before {
+                printfl!(
+                    "{} Excluded {} package(s) by 'exclude' patterns",
+                    style(">>").dim(),
+                    before - packages.len()
+                );
+            }
+        });
     }
 
     if packages.is_empty() {
@@ -201,7 +220,7 @@ fn main() -> Result<()> {
         git::check_branch_up_to_date(&repo_root, &repo, &branch_ctx.branch_name)?;
     }
 
-    if !quiet && (cli.verbose || cli.dry_run) {
+    verbosefl!(verbose_mode, {
         let channel_info = if let Some(ref pre) = branch_ctx.prerelease {
             format!(" (prerelease: {})", pre)
         } else if branch_ctx.maintenance {
@@ -218,7 +237,7 @@ fn main() -> Result<()> {
             style(channel_info).dim()
         );
         printfl!();
-    }
+    });
 
     let mut releases =
         version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
@@ -232,15 +251,17 @@ fn main() -> Result<()> {
                 .iter()
                 .any(|pat| config::glob_match(pat, &r.package_name))
         });
-        let skipped = before - releases.len();
-        if skipped > 0 && !quiet && (cli.verbose || cli.dry_run) {
-            printfl!(
-                "{} Skipped {} package(s) not included in branch '{}' config",
-                style(">>").dim(),
-                skipped,
-                branch_ctx.branch_name
-            );
-        }
+        verbosefl!(verbose_mode, {
+            let skipped = before - releases.len();
+            if skipped > 0 {
+                printfl!(
+                    "{} Skipped {} package(s) not included in branch '{}' config",
+                    style(">>").dim(),
+                    skipped,
+                    branch_ctx.branch_name
+                );
+            }
+        });
     }
 
     if cli.show_next_version {
@@ -279,7 +300,7 @@ fn main() -> Result<()> {
             style(&release.bump).fg(bump_color)
         );
 
-        if cli.verbose || cli.dry_run {
+        verbosefl!(verbose_mode, {
             const MAX_COMMITS_SHOWN: usize = 10;
             for commit in release.commits.iter().take(MAX_COMMITS_SHOWN) {
                 let type_str = if commit.breaking {
@@ -301,7 +322,7 @@ fn main() -> Result<()> {
                     release.commits.len() - MAX_COMMITS_SHOWN
                 );
             }
-        }
+        });
     }
     printfl!();
 
@@ -324,14 +345,13 @@ fn main() -> Result<()> {
                 .iter()
                 .any(|pat| config::glob_match(pat, &branch_ctx.branch_name))
         {
-            if cli.verbose || cli.dry_run {
-                printfl!(
-                    "{} Skipping step '{}' (not configured for branch '{}')",
-                    style(">>").dim(),
-                    step_cfg.name,
-                    branch_ctx.branch_name
-                );
-            }
+            verbosefl!(
+                verbose_mode,
+                "{} Skipping step '{}' (not configured for branch '{}')",
+                style(">>").dim(),
+                step_cfg.name,
+                branch_ctx.branch_name
+            );
             continue;
         }
 
@@ -376,7 +396,7 @@ fn main() -> Result<()> {
                 })
                 .cloned()
                 .collect();
-            if cli.verbose || cli.dry_run {
+            verbosefl!(verbose_mode, {
                 let skipped = releases.len() - fr.len();
                 if skipped > 0 {
                     printfl!(
@@ -386,7 +406,7 @@ fn main() -> Result<()> {
                         releases.len()
                     );
                 }
-            }
+            });
             (fp, fr)
         };
 
