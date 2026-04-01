@@ -75,29 +75,31 @@ fn main() -> Result<()> {
 
     let config_source = &cli.config.clone().unwrap_or(repo_root.clone());
 
-    // Validate config against schema before loading
-    if !cli.dangerously_skip_config_check
-        && let Some((content, file_path, format)) = config::schema::find_config(config_source)?
-    {
-        let errors = config::schema::validate(&content, format);
-        if !errors.is_empty() {
-            eprintln!(
-                "{} Invalid config file: {}",
-                style("error:").red().bold(),
-                file_path.display()
-            );
-            for err in &errors {
-                eprintln!("  {} {}", style("•").red(), err);
+    let cfg = match config::schema::find_config(config_source)? {
+        Some((content, file_path, format)) => {
+            if !cli.dangerously_skip_config_check {
+                let errors = config::schema::validate(&content, format);
+                if !errors.is_empty() {
+                    eprintln!(
+                        "{} Invalid config file: {}",
+                        style("error:").red().bold(),
+                        file_path.display()
+                    );
+                    for err in &errors {
+                        eprintln!("  {} {}", style("•").red(), err);
+                    }
+                    eprintln!(
+                        "\n  Use {} to bypass this check.",
+                        style("--dangerously-skip-config-check").yellow()
+                    );
+                    std::process::exit(1);
+                }
             }
-            eprintln!(
-                "\n  Use {} to bypass this check.",
-                style("--dangerously-skip-config-check").yellow()
-            );
-            std::process::exit(1);
+            config::schema::parse_config(&content, format)
+                .with_context(|| format!("parsing config file: {}", file_path.display()))?
         }
-    }
-
-    let cfg = config::load_config(config_source)?;
+        None => config::Config::default(),
+    };
 
     let quiet = cli.show_next_version;
 

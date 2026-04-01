@@ -72,6 +72,7 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
     let output_clone = Arc::clone(&all_output);
     let spinner_clone = spinner.clone();
     let step_name = opts.step_name.to_string();
+    let step_name_clone = step_name.clone();
     let is_tty_clone = is_tty;
 
     let stdout_handle = std::thread::spawn(move || {
@@ -80,11 +81,9 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
             &output_clone,
             spinner_clone.as_ref(),
             is_tty_clone,
-            &step_name,
+            &step_name_clone,
         );
     });
-
-    let step_name = opts.step_name.to_string();
     stream_lines(
         child.stderr.take(),
         &all_output,

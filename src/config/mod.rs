@@ -153,17 +153,6 @@ impl Default for Config {
     }
 }
 
-/// Load configuration from a file or directory.
-/// Searches for `.release.yaml`, `.release.json`, or `.release.jsonc`.
-/// Returns defaults if no config file is found.
-pub fn load_config(path: &Path) -> Result<Config> {
-    match schema::find_config(path)? {
-        Some((content, file_path, format)) => schema::parse_config(&content, format)
-            .with_context(|| format!("parsing config file: {}", file_path.display())),
-        None => Ok(Config::default()),
-    }
-}
-
 /// Resolve the repository root from a starting path.
 /// Returns both the root path and the opened Repository to avoid re-opening it.
 pub fn find_repo_root(start: &Path) -> Result<(PathBuf, git2::Repository)> {

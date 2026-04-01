@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 /// Bundled JSON schema for config validation.
 static SCHEMA_JSON: &str = include_str!("../../schema.json");
@@ -56,6 +57,13 @@ pub fn parse_config(content: &str, format: ConfigFormat) -> Result<super::Config
     }
 }
 
+/// Compiled schema validator, cached for reuse.
+static SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
+    let schema: serde_json::Value =
+        serde_json::from_str(SCHEMA_JSON).expect("bundled schema.json is invalid — this is a bug");
+    jsonschema::validator_for(&schema).expect("schema compilation failed — this is a bug")
+});
+
 /// Validate raw config content against the bundled JSON schema.
 /// Returns a list of validation error messages (empty = valid).
 pub fn validate(content: &str, format: ConfigFormat) -> Vec<String> {
@@ -64,15 +72,7 @@ pub fn validate(content: &str, format: ConfigFormat) -> Vec<String> {
         Err(e) => return vec![e.to_string()],
     };
 
-    let schema: serde_json::Value = serde_json::from_str(SCHEMA_JSON)
-        .expect("bundled schema.json is invalid JSON — this is a bug");
-
-    let validator = match jsonschema::validator_for(&schema) {
-        Ok(v) => v,
-        Err(e) => return vec![format!("Failed to compile schema: {}", e)],
-    };
-
-    validator
+    SCHEMA_VALIDATOR
         .iter_errors(&json_value)
         .map(|err| {
             let path = err.instance_path().to_string();
