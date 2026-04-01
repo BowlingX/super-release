@@ -57,8 +57,10 @@ setup_repo() {
   local bare="$dir.bare"
 
   # Create a local bare repo as remote (semantic-release requires a valid remote).
-  # Set default branch to 'main' explicitly — CI runners may default to 'master'.
-  git init --bare --quiet --initial-branch=main "$bare"
+  git init --bare --quiet "$bare"
+  # Ensure the bare repo's default branch is 'main' — CI runners may default to 'master',
+  # which causes semantic-release to reject the branch.
+  git -C "$bare" symbolic-ref HEAD refs/heads/main
 
   mkdir -p "$dir"
   git -C "$dir" init -b main --quiet
