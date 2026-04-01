@@ -34,6 +34,12 @@ pub struct BranchDef {
     #[serde(default)]
     pub range: Option<String>,
 
+    /// Distribution channel (npm dist-tag). Controls which dist-tag is used
+    /// when publishing. Defaults to prerelease name for prerelease branches,
+    /// branch name for maintenance branches, unset for the primary release branch.
+    #[serde(default)]
+    pub channel: Option<String>,
+
     /// Glob patterns to include. Only matching packages are released on this branch.
     /// If empty, all packages are released.
     #[serde(default)]
@@ -82,6 +88,21 @@ impl BranchConfig {
         }
     }
 
+    pub fn resolve_channel(&self, actual_branch: &str) -> Option<String> {
+        match self {
+            BranchConfig::Name(_) => None,
+            BranchConfig::Full(def) => {
+                if let Some(ref ch) = def.channel {
+                    return Some(ch.clone());
+                }
+                if def.maintenance {
+                    return Some(actual_branch.to_string());
+                }
+                None
+            }
+        }
+    }
+
     pub fn packages(&self) -> &[String] {
         match self {
             BranchConfig::Name(_) => &[],
@@ -123,6 +144,8 @@ pub struct BranchContext {
     pub maintenance: bool,
     /// Parsed maintenance range from the branch name (e.g. `1.x` → `Major(1)`).
     pub maintenance_range: Option<MaintenanceRange>,
+    /// Distribution channel (npm dist-tag). None = default (`latest`).
+    pub channel: Option<String>,
     /// Package include filter from branch config. Empty = all packages.
     pub packages: Vec<String>,
 }
@@ -146,11 +169,14 @@ pub fn resolve_branch_context(
             } else {
                 None
             };
+            let prerelease = bc.resolve_prerelease(&branch_name);
+            let channel = bc.resolve_channel(&branch_name).or(prerelease.clone());
             return Ok(Some(BranchContext {
-                prerelease: bc.resolve_prerelease(&branch_name),
+                prerelease,
                 branch_name: branch_name.clone(),
                 maintenance,
                 maintenance_range,
+                channel,
                 packages: bc.packages().to_vec(),
             }));
         }
@@ -178,6 +204,7 @@ mod tests {
             prerelease: PrereleaseSetting::Channel("beta".into()),
             maintenance: false,
             range: None,
+            channel: None,
             packages: Vec::new(),
         });
         assert_eq!(bc.resolve_prerelease("beta").as_deref(), Some("beta"));
@@ -190,6 +217,7 @@ mod tests {
             prerelease: PrereleaseSetting::Flag(true),
             maintenance: false,
             range: None,
+            channel: None,
             packages: Vec::new(),
         });
         assert_eq!(
@@ -206,6 +234,7 @@ mod tests {
             prerelease: PrereleaseSetting::Flag(false),
             maintenance: false,
             range: None,
+            channel: None,
             packages: Vec::new(),
         });
         assert!(bc.resolve_prerelease("staging").is_none());
@@ -218,6 +247,7 @@ mod tests {
             prerelease: PrereleaseSetting::Disabled,
             maintenance: true,
             range: None,
+            channel: None,
             packages: Vec::new(),
         });
         assert!(bc.is_maintenance());

@@ -211,15 +211,12 @@ pub fn determine_releases(
                 return Ok(None);
             }
 
-            // On maintenance branches, check if the computed version already
-            // exists as a tag (released on another branch).
-            if branch_ctx.maintenance
-                && next_version.pre.is_empty()
-                && tag_index.version_exists(&pkg.name, &next_version)
-            {
+            // Check if the computed version already exists as a tag
+            // (released on another branch). Prevents version collisions.
+            if next_version.pre.is_empty() && tag_index.version_exists(&pkg.name, &next_version) {
                 anyhow::bail!(
                     "Version {} for '{}' already exists as a tag. \
-                     The maintenance branch '{}' cannot release this version \
+                     Branch '{}' cannot release this version \
                      because it was already released on another branch.",
                     next_version,
                     pkg.name,
@@ -618,6 +615,7 @@ mod tests {
             prerelease: None,
             maintenance: false,
             maintenance_range: None,
+            channel: None,
             packages: Vec::new(),
         }
     }

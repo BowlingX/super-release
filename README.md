@@ -136,7 +136,10 @@ For editor autocompletion:
 ```yaml
 branches:
   - main
-  - master
+  - name: next
+    channel: next                  # publishes to "next" npm dist-tag
+  - name: next-major
+    channel: next-major
   - name: beta
     prerelease: beta
   - name: "test-*"
@@ -190,15 +193,38 @@ git:
 Defines which branches can produce releases. Only configured branches are allowed -- running on an unconfigured branch
 exits cleanly.
 
-| Form                                       | Type                                | Example versions                |
-|--------------------------------------------|-------------------------------------|---------------------------------|
-| `- main`                                   | Stable                              | `1.0.0`, `1.1.0`, `2.0.0`       |
-| `- name: beta`<br>`  prerelease: beta`     | Prerelease (fixed channel)          | `2.0.0-beta.1`, `2.0.0-beta.2`  |
-| `- name: "test-*"`<br>`  prerelease: true` | Prerelease (branch name as channel) | `2.0.0-test-my-feature.1`       |
-| `- name: "1.x"`<br>`  maintenance: true`   | Maintenance (major locked)          | `1.5.1`, `1.6.0` (no `2.x`)     |
-| `- name: "1.5.x"`<br>`  maintenance: true` | Maintenance (major+minor locked)    | `1.5.1`, `1.5.2` (no `1.6.x`)   |
+| Form                                            | Type                                | Example versions                 |
+|-------------------------------------------------|-------------------------------------|----------------------------------|
+| `- main`                                        | Stable (primary)                    | `1.0.0`, `1.1.0`, `2.0.0`        |
+| `- name: next`<br>`  channel: next`             | Stable (next channel)               | `1.1.0` on `next` dist-tag       |
+| `- name: next-major`<br>`  channel: next-major` | Stable (next-major channel)         | `2.0.0` on `next-major` dist-tag |
+| `- name: beta`<br>`  prerelease: beta`          | Prerelease (fixed channel)          | `2.0.0-beta.1`, `2.0.0-beta.2`   |
+| `- name: "test-*"`<br>`  prerelease: true`      | Prerelease (branch name as channel) | `2.0.0-test-my-feature.1`        |
+| `- name: "1.x"`<br>`  maintenance: true`        | Maintenance (major locked)          | `1.5.1`, `1.6.0` (no `2.x`)      |
+| `- name: "1.5.x"`<br>`  maintenance: true`      | Maintenance (major+minor locked)    | `1.5.1`, `1.5.2` (no `1.6.x`)    |
+
+##### Multiple release branches
+
+You can have multiple stable release branches (e.g. `main`, `next`, `next-major`) that release independently. Each
+non-primary branch should set a `channel` so it publishes to a different npm dist-tag:
+
+```yaml
+branches:
+  - main                          # primary: publishes to "latest"
+  - name: next
+    channel: next                 # publishes to "next" dist-tag
+  - name: next-major
+    channel: next-major           # publishes to "next-major" dist-tag
+```
+
+**Version collision detection**: If a branch tries to release a version that already exists as a tag (e.g. `next`
+released `1.1.0` and `main` also tries `1.1.0`), super-release will error. Merge the higher branch into the lower one
+first, or let the lower branch release a different version.
+
+##### Maintenance branches
 
 Maintenance branches cap version bumps to stay within a range inferred from the branch name:
+
 - `1.x` -- major is locked: `feat:` bumps minor, `feat!:` is capped to minor, no major bumps
 - `1.5.x` -- major and minor are locked: all bumps become patch only
 
@@ -211,7 +237,12 @@ branches:
     range: "1.5.x"          # cap to 1.5.x patch range
 ```
 
-Branches can also filter which packages they release with `packages`:
+In monorepos, packages whose version is outside the maintenance range are automatically skipped. For example, on branch
+`1.x`, a package at `v3.0.0` will be skipped while a package at `v1.2.0` will be released normally.
+
+##### Branch options
+
+Branches can filter which packages they release with `packages`:
 
 ```yaml
 branches:
@@ -350,7 +381,9 @@ The git step:
 Tags are idempotent -- existing tags are skipped. The npm step checks the registry before publishing (`npm view`) and
 skips versions that already exist. Non-404 errors (auth, network) abort the release to prevent partial publishes.
 
-## Monorepo Structure
+## Monorepo Support
+
+### Structure
 
 ```
 my-monorepo/
@@ -367,6 +400,56 @@ my-monorepo/
 
 Packages are discovered by finding `package.json` files recursively (respects `.gitignore`). Each commit is associated
 to a package based on which files it changed.
+
+### Independent versioning
+
+Each package has its own version and release tag. A commit that only touches `packages/core/` will only bump
+`@acme/core`. Packages are versioned independently -- `@acme/core` can be at `v3.0.0` while `@acme/utils` is at
+`v1.2.0`.
+
+### Filtering packages
+
+Use `packages` (allow-list) and `exclude` (deny-list) at the top level to control which packages are released:
+
+```yaml
+packages:
+  - "@acme/*"        # only release @acme-scoped packages
+exclude:
+  - my-monorepo-root # skip the root package
+```
+
+### Dependencies and publish order
+
+Packages that depend on each other (via `dependencies` or `devDependencies` in `package.json`) are published in
+dependency order. If `@acme/utils` depends on `@acme/core`, core is published first. Independent packages publish in
+parallel.
+
+### Global file dependencies
+
+Files that affect all packages (lock files, shared config) can be declared as global dependencies. A commit that only
+changes `yarn.lock` will trigger releases for all packages:
+
+```yaml
+dependencies:
+  - yarn.lock
+  - pnpm-lock.yaml
+```
+
+### Maintenance branches in monorepos
+
+On a maintenance branch like `1.x`, packages whose current version is outside the maintenance range are automatically
+skipped. For example, if `@acme/core` is at `v3.0.0` and `@acme/utils` is at `v1.2.0`, only `@acme/utils` will be
+released on the `1.x` branch.
+
+You can also use per-branch `packages` filters for explicit control:
+
+```yaml
+branches:
+  - name: "1.x"
+    maintenance: true
+    packages:
+      - "@acme/utils"    # only release utils on this maintenance branch
+```
 
 ## Performance
 

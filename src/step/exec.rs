@@ -87,7 +87,7 @@ fn run_for_releases(
     releases: &[PackageRelease],
     phase: &str,
 ) -> Result<()> {
-    let channel = ctx.branch.prerelease.as_deref().unwrap_or("");
+    let channel = ctx.branch.channel.as_deref().unwrap_or("");
     let step_name = format!("exec:{}", phase);
     let repo_root = ctx.repo_root;
     let dry_run = ctx.dry_run;

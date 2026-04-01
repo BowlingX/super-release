@@ -206,6 +206,8 @@ fn main() -> Result<()> {
             format!(" (prerelease: {})", pre)
         } else if branch_ctx.maintenance {
             " (maintenance)".to_string()
+        } else if let Some(ref ch) = branch_ctx.channel {
+            format!(" (channel: {})", ch)
         } else {
             String::new()
         };

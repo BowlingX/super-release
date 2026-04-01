@@ -83,7 +83,7 @@ impl Step for NpmStep {
     ) -> Result<Vec<std::path::PathBuf>> {
         let opts: NpmOptions = parse_options(config)?;
         let pm = resolve_pm(ctx, &opts)?;
-        let dist_tag: Option<&str> = opts.tag.as_deref().or(ctx.branch.prerelease.as_deref());
+        let dist_tag: Option<&str> = opts.tag.as_deref().or(ctx.branch.channel.as_deref());
 
         let order = topological_sort(packages)?;
         let release_set: HashMap<&str, &PackageRelease> = releases

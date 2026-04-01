@@ -105,6 +105,11 @@
           "description": "Explicit version range for maintenance branches (e.g. \"1.x\", \"1.5.x\"). If omitted, inferred from branch name.",
           "examples": ["1.x", "1.5.x", "2.x"]
         },
+        "channel": {
+          "type": "string",
+          "description": "Distribution channel (npm dist-tag). Defaults to prerelease name for prerelease branches, branch name for maintenance branches, unset (latest) for the primary release branch.",
+          "examples": ["next", "next-major", "1.x"]
+        },
         "packages": {
           "type": "array",
           "items": { "type": "string" },
