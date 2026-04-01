@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.1] - 2026-04-01
+
+### 🐛 Bug Fixes
+
+- Simplify verbose logging
+
+### ⚙️ Miscellaneous Tasks
+
+- Added 2e2 comparison
 ## [1.1.0] - 2026-04-01
 
 ### 🚀 Features
