@@ -45,6 +45,10 @@ npm install --prefix "$SR_MODULES" semantic-release @semantic-release/commit-ana
 SR_BIN="$SR_MODULES/node_modules/.bin/semantic-release"
 export NODE_PATH="$SR_MODULES/node_modules"
 
+# Important: Force CI=false so semantic-release doesn't expect GitHub tokens or
+# other CI-specific environment variables when running against local bare repos.
+export CI=false
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 setup_repo() {
