@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.4] - 2026-04-04
+
+### 🐛 Bug Fixes
+
+- Validate build hash before executing binary
+
+### ⚙️ Miscellaneous Tasks
+
+- Added lockfile
 ## [1.1.3] - 2026-04-01
 
 ### 🐛 Bug Fixes
