@@ -137,8 +137,7 @@ fn main() -> Result<()> {
     let discovered = pkg_resolver.discover(&repo_root)?;
 
     // Separate skipped packages (e.g. missing name) from valid ones
-    let (skipped, mut packages): (Vec<_>, Vec<_>) =
-        discovered.into_iter().partition(|p| p.skipped);
+    let (skipped, mut packages): (Vec<_>, Vec<_>) = discovered.into_iter().partition(|p| p.skipped);
     pkg_resolver.resolve_dependencies(&mut packages);
     package::sort_by_path_depth(&mut packages);
 

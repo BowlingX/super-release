@@ -281,7 +281,13 @@ mod tests {
 
         let result = parse_package_json(dir.path(), &path).unwrap().unwrap();
         assert!(result.skipped);
-        assert!(result.warning.as_ref().unwrap().contains("no \"name\" field"));
+        assert!(
+            result
+                .warning
+                .as_ref()
+                .unwrap()
+                .contains("no \"name\" field")
+        );
     }
 
     #[test]
@@ -305,11 +311,13 @@ mod tests {
         let result = parse_package_json(dir.path(), &path).unwrap().unwrap();
         assert_eq!(result.name, "my-pkg");
         assert_eq!(result.version, Version::new(0, 0, 0));
-        assert!(result
-            .warning
-            .as_ref()
-            .unwrap()
-            .contains("no \"version\" field"));
+        assert!(
+            result
+                .warning
+                .as_ref()
+                .unwrap()
+                .contains("no \"version\" field")
+        );
     }
 
     #[test]
