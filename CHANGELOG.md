@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2.0] - 2026-04-04
+
+### 🚀 Features
+
+- Add visibility for implicitly skipped packages, ci/cd
+
+### ⚙️ Miscellaneous Tasks
+
+- Configured toolchain
+- Adjusted ci/cd, added dependabot
+- Formatting, added more tests for monorepos
 ## [1.1.4] - 2026-04-04
 
 ### 🐛 Bug Fixes
