@@ -43,6 +43,11 @@ jobs:
           tar xzf artifacts/super-release-linux-x86_64/super-release-linux-x86_64.tar.gz -C artifacts
           chmod +x artifacts/super-release
 
+      - name: Bundle artifact hashes into npm package
+        run: |
+          find artifacts -name '*.sha256' -exec cp {} npm/bin/ \;
+          ls -la npm/bin/*.sha256
+
       - name: Run super-release
         run: |
           git config user.name "github-actions[bot]"

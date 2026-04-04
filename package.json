@@ -4,7 +4,7 @@
   },
   "description": "A fast semantic-release alternative for monorepos, written in Rust",
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "files": [
     "npm/bin",

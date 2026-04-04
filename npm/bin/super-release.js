@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   createWriteStream,
+  readFileSync,
   unlinkSync,
   chmodSync,
 } from "node:fs";
@@ -91,6 +92,27 @@ async function install() {
   try {
     const response = await download(url);
     await pipeline(response, createWriteStream(tmpFile));
+
+    const hashFile = join(__dirname, `${artifact}.${ext}.sha256`);
+    if (existsSync(hashFile)) {
+      const expectedHash = readFileSync(hashFile, "utf8").trim().split(/\s+/)[0].toLowerCase();
+      const fileBuffer = readFileSync(tmpFile);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", fileBuffer);
+      const actualHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+      if (actualHash !== expectedHash) {
+        console.error(`Hash mismatch for ${artifact}.${ext}!`);
+        console.error(`  Expected: ${expectedHash}`);
+        console.error(`  Actual:   ${actualHash}`);
+        console.error(`This may indicate a tampered or corrupted download.`);
+        unlinkSync(tmpFile);
+        process.exit(1);
+      }
+      console.error(`Hash verified for ${artifact}.${ext}`);
+    } else {
+      console.error(`No hash file found at ${hashFile}, cannot verify download integrity.`);
+      unlinkSync(tmpFile);
+      process.exit(1);
+    }
 
     if (isWindows) {
       execFileSync("powershell", ["-Command", `Expand-Archive -Path '${tmpFile}' -DestinationPath '${__dirname}' -Force`], { stdio: "ignore" });
