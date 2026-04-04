@@ -134,7 +134,11 @@ fn main() -> Result<()> {
     }
 
     let pkg_resolver = resolver::create_resolver("node").expect("node resolver must exist");
-    let mut packages = pkg_resolver.discover(&repo_root)?;
+    let discovered = pkg_resolver.discover(&repo_root)?;
+
+    // Separate skipped packages (e.g. missing name) from valid ones
+    let (skipped, mut packages): (Vec<_>, Vec<_>) =
+        discovered.into_iter().partition(|p| p.skipped);
     pkg_resolver.resolve_dependencies(&mut packages);
     package::sort_by_path_depth(&mut packages);
 
@@ -170,7 +174,7 @@ fn main() -> Result<()> {
         });
     }
 
-    if packages.is_empty() {
+    if packages.is_empty() && skipped.is_empty() {
         if !quiet {
             printfl!("{}", style("No packages found.").yellow());
         }
@@ -183,20 +187,42 @@ fn main() -> Result<()> {
             style(">>").bold().blue(),
             packages.len()
         );
-        for pkg in &packages {
-            printfl!(
-                "   {} {} ({})",
-                style("*").dim(),
-                style(&pkg.name).bold(),
-                style(if pkg.path.as_os_str().is_empty() {
-                    ".".into()
-                } else {
-                    pkg.path.display().to_string()
-                })
-                .dim()
-            );
+        for pkg in packages.iter().chain(&skipped) {
+            let path_display = if pkg.path.as_os_str().is_empty() {
+                ".".to_string()
+            } else {
+                pkg.path.display().to_string()
+            };
+            let display_name = if pkg.skipped {
+                pkg.manifest_path.display().to_string()
+            } else {
+                pkg.name.clone()
+            };
+            if let Some(ref warning) = pkg.warning {
+                printfl!(
+                    "   {} {} ({}) — {}",
+                    style("*").yellow(),
+                    style(&display_name).bold(),
+                    style(&path_display).dim(),
+                    style(warning).yellow()
+                );
+            } else {
+                printfl!(
+                    "   {} {} ({})",
+                    style("*").dim(),
+                    style(&display_name).bold(),
+                    style(&path_display).dim()
+                );
+            }
         }
         printfl!();
+    }
+
+    if packages.is_empty() {
+        if !quiet {
+            printfl!("{}", style("No packages found.").yellow());
+        }
+        return Ok(());
     }
 
     let branch_ctx = match config::resolve_branch_context(&repo, &cfg)? {

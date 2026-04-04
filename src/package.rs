@@ -23,6 +23,10 @@ pub struct Package {
     pub dependencies: HashMap<String, String>,
     /// All devDependencies (for reference)
     pub dev_dependencies: HashMap<String, String>,
+    /// Warning about the package manifest (e.g. missing name or version), shown after filtering
+    pub warning: Option<String>,
+    /// Whether this package was skipped during discovery (e.g. missing name)
+    pub skipped: bool,
 }
 
 /// Build a topological ordering of packages based on local dependencies.
@@ -124,6 +128,8 @@ mod tests {
                 .collect(),
             dependencies: HashMap::new(),
             dev_dependencies: HashMap::new(),
+            warning: None,
+            skipped: false,
         }
     }
 

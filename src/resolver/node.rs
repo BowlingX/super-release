@@ -152,26 +152,55 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
     let pkg_json: PackageJson = serde_json::from_str(&content)
         .with_context(|| format!("parsing {}", manifest_path.display()))?;
 
-    let name = match pkg_json.name {
-        Some(n) => n,
-        None => return Ok(None),
-    };
-
-    let version = match pkg_json.version.as_deref() {
-        Some(v) => Version::parse(v).unwrap_or_else(|_| Version::new(0, 0, 0)),
-        None => Version::new(0, 0, 0),
-    };
-
     let rel_manifest = manifest_path
         .strip_prefix(root)
         .unwrap_or(manifest_path)
         .to_path_buf();
     let rel_dir = rel_manifest.parent().unwrap_or(Path::new("")).to_path_buf();
+    let is_root = rel_dir.as_os_str().is_empty();
+
+    let parsed_version = pkg_json.version.as_deref().map(Version::parse);
+    let (version, version_warning) = match &parsed_version {
+        Some(Ok(v)) => (v.clone(), None),
+        Some(Err(e)) => (
+            Version::new(0, 0, 0),
+            Some(format!(
+                "invalid version \"{}\": {}, defaulting to 0.0.0",
+                pkg_json.version.as_deref().unwrap_or(""),
+                e
+            )),
+        ),
+        None => (
+            Version::new(0, 0, 0),
+            Some("no \"version\" field, defaulting to 0.0.0".to_string()),
+        ),
+    };
+
+    let name = match pkg_json.name {
+        Some(n) => n,
+        None => {
+            let display_path = if is_root {
+                ".".to_string()
+            } else {
+                rel_dir.display().to_string()
+            };
+            return Ok(Some(Package {
+                name: display_path,
+                version: Version::new(0, 0, 0),
+                path: rel_dir,
+                manifest_path: rel_manifest,
+                is_root,
+                local_dependencies: HashMap::new(),
+                dependencies: HashMap::new(),
+                dev_dependencies: HashMap::new(),
+                warning: Some("no \"name\" field, skipped".to_string()),
+                skipped: true,
+            }));
+        }
+    };
 
     let dependencies = pkg_json.dependencies.unwrap_or_default();
     let dev_dependencies = pkg_json.dev_dependencies.unwrap_or_default();
-
-    let is_root = rel_dir.as_os_str().is_empty();
 
     Ok(Some(Package {
         name,
@@ -182,6 +211,8 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
         local_dependencies: HashMap::new(),
         dependencies,
         dev_dependencies,
+        warning: version_warning,
+        skipped: false,
     }))
 }
 
@@ -240,5 +271,56 @@ mod tests {
             content,
             r#"{"name":"@acme/app","version":"2.0.0","dependencies":{"@acme/core":"workspace:*"}}"#
         );
+    }
+
+    #[test]
+    fn test_parse_missing_name_returns_warning() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        std::fs::write(&path, r#"{"version": "1.0.0"}"#).unwrap();
+
+        let result = parse_package_json(dir.path(), &path).unwrap().unwrap();
+        assert!(result.skipped);
+        assert!(result.warning.as_ref().unwrap().contains("no \"name\" field"));
+    }
+
+    #[test]
+    fn test_parse_invalid_version_returns_warning() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        std::fs::write(&path, r#"{"name": "my-pkg", "version": "not-semver"}"#).unwrap();
+
+        let result = parse_package_json(dir.path(), &path).unwrap().unwrap();
+        assert_eq!(result.name, "my-pkg");
+        assert_eq!(result.version, Version::new(0, 0, 0));
+        assert!(result.warning.as_ref().unwrap().contains("invalid version"));
+    }
+
+    #[test]
+    fn test_parse_missing_version_returns_warning() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        std::fs::write(&path, r#"{"name": "my-pkg"}"#).unwrap();
+
+        let result = parse_package_json(dir.path(), &path).unwrap().unwrap();
+        assert_eq!(result.name, "my-pkg");
+        assert_eq!(result.version, Version::new(0, 0, 0));
+        assert!(result
+            .warning
+            .as_ref()
+            .unwrap()
+            .contains("no \"version\" field"));
+    }
+
+    #[test]
+    fn test_parse_valid_package_no_warning() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        std::fs::write(&path, r#"{"name": "my-pkg", "version": "1.2.3"}"#).unwrap();
+
+        let result = parse_package_json(dir.path(), &path).unwrap().unwrap();
+        assert_eq!(result.name, "my-pkg");
+        assert_eq!(result.version, Version::new(1, 2, 3));
+        assert!(result.warning.is_none());
     }
 }
