@@ -6,6 +6,10 @@
   "scripts": {
     "prepare": "tar xzf ../../artifacts/super-release-linux-aarch64/super-release-linux-aarch64.tar.gz && mv super-release super-release-linux-arm64"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BowlingX/super-release.git"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true

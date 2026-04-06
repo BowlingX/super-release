@@ -7,6 +7,9 @@ branches:
 
 tag_format: "v{version}"
 
+ignore:
+  - 'super-release-root'
+
 dependencies:
   - pnpm-lock.yaml
   - pnpm-workspace.yaml

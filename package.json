@@ -1,43 +1,5 @@
 {
-  "bin": {
-    "super-release": "npm/bin/super-release.js"
-  },
-  "description": "A fast semantic-release alternative for monorepos, written in Rust",
-  "engines": {
-    "node": ">=20"
-  },
-  "files": [
-    "npm/bin",
-    "README.md"
-  ],
-  "keywords": [
-    "semantic-release",
-    "monorepo",
-    "release",
-    "changelog",
-    "conventional-commits"
-  ],
-  "license": "MIT",
-  "name": "super-release",
-  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319",
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/BowlingX/super-release.git"
-  },
-  "scripts": {
-    "super-release": "node npm/bin/super-release.js"
-  },
-  "optionalDependencies": {
-    "super-release-linux-x64": "workspace:*",
-    "super-release-linux-arm64": "workspace:*",
-    "super-release-darwin-x64": "workspace:*",
-    "super-release-darwin-arm64": "workspace:*",
-    "super-release-windows-x64": "workspace:*"
-  },
-  "type": "module",
-  "version": "1.2.0"
+  "name": "super-release-root",
+  "version": "0.0.0",
+  "packageManager": "pnpm@10.33.0+sha512.10568bb4a6afb58c9eb3630da90cc9516417abebd3fabbe6739f0ae795728da1491e9db5a544c76ad8eb7570f5c4bb3d6c637b2cb41bfdcdb47fa823c8649319"
 }

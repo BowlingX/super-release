@@ -6,6 +6,10 @@
   "scripts": {
     "prepare": "unzip ../../artifacts/super-release-windows-x86_64/super-release-windows-x86_64.zip && mv super-release.exe super-release-windows-x64.exe"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BowlingX/super-release.git"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true

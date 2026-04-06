@@ -6,6 +6,10 @@
   "scripts": {
     "prepare": "tar xzf ../../artifacts/super-release-darwin-aarch64/super-release-darwin-aarch64.tar.gz && mv super-release super-release-darwin-arm64"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BowlingX/super-release.git"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true

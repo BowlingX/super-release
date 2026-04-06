@@ -6,6 +6,10 @@
   "scripts": {
     "prepare": "tar xzf ../../artifacts/super-release-linux-x86_64/super-release-linux-x86_64.tar.gz && mv super-release super-release-linux-x64 && tar xzf ../../artifacts/super-release-linux-x86_64-musl/super-release-linux-x86_64-musl.tar.gz && mv super-release super-release-linux-x64-musl"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BowlingX/super-release.git"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true
