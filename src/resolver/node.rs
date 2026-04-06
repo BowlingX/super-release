@@ -18,6 +18,8 @@ struct PackageJson {
     dependencies: Option<HashMap<String, String>>,
     #[serde(rename = "devDependencies")]
     dev_dependencies: Option<HashMap<String, String>>,
+    #[serde(rename = "optionalDependencies")]
+    optional_dependencies: Option<HashMap<String, String>>,
     private: Option<bool>,
 }
 
@@ -36,8 +38,11 @@ impl PackageResolver for NodeResolver {
             packages.iter().map(|p| p.name.clone()).collect();
         for pkg in packages.iter_mut() {
             let mut local = HashMap::new();
-            for (dep_name, dep_version) in
-                pkg.dependencies.iter().chain(pkg.dev_dependencies.iter())
+            for (dep_name, dep_version) in pkg
+                .dependencies
+                .iter()
+                .chain(pkg.dev_dependencies.iter())
+                .chain(pkg.optional_dependencies.iter())
             {
                 if names.contains(dep_name) {
                     local.insert(dep_name.clone(), dep_version.clone());
@@ -193,6 +198,7 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
                 local_dependencies: HashMap::new(),
                 dependencies: HashMap::new(),
                 dev_dependencies: HashMap::new(),
+                optional_dependencies: HashMap::new(),
                 warning: Some("no \"name\" field, skipped".to_string()),
                 skipped: true,
             }));
@@ -201,6 +207,7 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
 
     let dependencies = pkg_json.dependencies.unwrap_or_default();
     let dev_dependencies = pkg_json.dev_dependencies.unwrap_or_default();
+    let optional_dependencies = pkg_json.optional_dependencies.unwrap_or_default();
 
     Ok(Some(Package {
         name,
@@ -211,6 +218,7 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
         local_dependencies: HashMap::new(),
         dependencies,
         dev_dependencies,
+        optional_dependencies,
         warning: version_warning,
         skipped: false,
     }))

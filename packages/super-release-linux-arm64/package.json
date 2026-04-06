@@ -1,0 +1,15 @@
+{
+  "name": "super-release-linux-arm64",
+  "version": "1.0.0",
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "scripts": {
+    "prepare": "tar xzf ../../artifacts/super-release-linux-aarch64/super-release-linux-aarch64.tar.gz && mv super-release super-release-linux-arm64"
+  },
+  "files": [
+    "super-release-linux-arm64"
+  ],
+  "exports": {
+    ".": "./super-release-linux-arm64"
+  }
+}

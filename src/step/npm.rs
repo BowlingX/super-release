@@ -418,6 +418,7 @@ mod tests {
                 .map(|d| (d.to_string(), "^1.0.0".to_string()))
                 .collect(),
             dev_dependencies: HashMap::new(),
+            optional_dependencies: HashMap::new(),
             warning: None,
             skipped: false,
         }

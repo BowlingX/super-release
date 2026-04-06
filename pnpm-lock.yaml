@@ -6,4 +6,30 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    optionalDependencies:
+      super-release-darwin-arm64:
+        specifier: workspace:*
+        version: link:packages/super-release-darwin-arm64
+      super-release-darwin-x64:
+        specifier: workspace:*
+        version: link:packages/super-release-darwin-x64
+      super-release-linux-arm64:
+        specifier: workspace:*
+        version: link:packages/super-release-linux-arm64
+      super-release-linux-x64:
+        specifier: workspace:*
+        version: link:packages/super-release-linux-x64
+      super-release-windows-x64:
+        specifier: workspace:*
+        version: link:packages/super-release-windows-x64
+
+  packages/super-release-darwin-arm64: {}
+
+  packages/super-release-darwin-x64: {}
+
+  packages/super-release-linux-arm64: {}
+
+  packages/super-release-linux-x64: {}
+
+  packages/super-release-windows-x64: {}

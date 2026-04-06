@@ -1,0 +1,15 @@
+{
+  "name": "super-release-windows-x64",
+  "version": "1.0.0",
+  "os": ["win32"],
+  "cpu": ["x64"],
+  "scripts": {
+    "prepare": "unzip ../../artifacts/super-release-windows-x86_64/super-release-windows-x86_64.zip && mv super-release.exe super-release-windows-x64.exe"
+  },
+  "files": [
+    "super-release-windows-x64.exe"
+  ],
+  "exports": {
+    ".": "./super-release-windows-x64.exe"
+  }
+}

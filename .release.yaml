@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/bowlingx/super-release/main/schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/bowlingx/super-release/v1.2.0/schema.json
 # super-release releases itself
 
 branches:
@@ -7,12 +7,19 @@ branches:
 
 tag_format: "v{version}"
 
+dependencies:
+  - pnpm-lock.yaml
+  - pnpm-workspace.yaml
+  - package.json
+
 steps:
   - name: changelog
   - name: npm
     options:
       provenance: true
   - name: exec
+    packages:
+      - "super-release"
     options:
       prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml && cargo update super-release"
       files:
