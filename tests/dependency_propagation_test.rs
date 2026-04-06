@@ -72,11 +72,7 @@ fn test_dependency_change_propagates_to_dependent() {
         root,
         &[
             ("@test/core", "1.0.0", ""),
-            (
-                "@test/app",
-                "1.0.0",
-                r#""@test/core": "^1.0.0""#,
-            ),
+            ("@test/app", "1.0.0", r#""@test/core": "^1.0.0""#),
         ],
         BASE_CONFIG,
     );
@@ -190,10 +186,7 @@ fn test_no_propagation_without_dependency() {
 
     setup_monorepo(
         root,
-        &[
-            ("@test/core", "1.0.0", ""),
-            ("@test/utils", "1.0.0", ""),
-        ],
+        &[("@test/core", "1.0.0", ""), ("@test/utils", "1.0.0", "")],
         BASE_CONFIG,
     );
 
@@ -396,11 +389,7 @@ fn test_no_double_release_when_both_changed() {
         root,
         &[
             ("@test/core", "1.0.0", ""),
-            (
-                "@test/app",
-                "1.0.0",
-                r#""@test/core": "^1.0.0""#,
-            ),
+            ("@test/app", "1.0.0", r#""@test/core": "^1.0.0""#),
         ],
         BASE_CONFIG,
     );
