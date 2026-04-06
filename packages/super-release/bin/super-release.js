@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -26,40 +26,23 @@ function isMusl() {
 function getBinaryPath() {
   const os = platform() === "win32" ? "windows" : platform();
   const cpu = arch();
-  const pkg = `super-release-${os}-${cpu}`;
+  const pkgName = `super-release-${os}-${cpu}`;
 
   try {
     if (os === "linux" && isMusl()) {
-      return fileURLToPath(import.meta.resolve(`${pkg}/musl`));
+      return fileURLToPath(import.meta.resolve(`${pkgName}/musl`));
     }
-    return fileURLToPath(import.meta.resolve(pkg));
+    return fileURLToPath(import.meta.resolve(pkgName));
   } catch {
     throw new Error(
-      `Unsupported platform: ${os}-${cpu}. Install the platform-specific package "${pkg}" manually.`
+      `Unsupported platform: ${os}-${cpu}. Install the platform-specific package "${pkgName}" manually.`
     );
   }
 }
 
-const binPath = getBinaryPath();
+const result = spawnSync(getBinaryPath(), process.argv.slice(2), {
+  stdio: "inherit",
+  env: { ...process.env, SUPER_RELEASE_VERSION: pkg.version },
+});
 
-try {
-  execFileSync(binPath, process.argv.slice(2), {
-    stdio: "inherit",
-    env: { ...process.env, SUPER_RELEASE_VERSION: pkg.version },
-  });
-  process.exit(0);
-} catch (err) {
-  if (err.code === "ENOENT" || err.code === "EACCES") {
-    console.error(
-      `super-release: binary not found or not executable at ${binPath}`
-    );
-    console.error(err);
-  } else if (err.status === null) {
-    console.error(`super-release: failed to execute binary at ${binPath}`);
-    console.error(
-      `If running on Alpine/musl, ensure the musl build is being downloaded.`
-    );
-    console.error(err);
-  }
-  process.exit(err.status ?? 1);
-}
+process.exit(result.status ?? 1);
