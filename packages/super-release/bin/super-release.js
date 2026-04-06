@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { fileURLToPath } from "node:url";
-import pkg from "../../package.json" with { type: "json" };
+import pkg from "../package.json" with { type: "json" };
 
 function isMusl() {
   try {

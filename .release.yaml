@@ -14,16 +14,29 @@ dependencies:
   - pnpm-lock.yaml
   - pnpm-workspace.yaml
   - package.json
+  - 'Cargo.toml'
+  - 'Cargo.lock'
+  - 'src/**'
+  - '.release.yaml'
   - '.github/workflows/*.yml'
 
 steps:
   - name: changelog
+    packages:
+      - "super-release-root"
   - name: npm
     options:
       provenance: true
+    packages:
+      - 'super-release'
+      - 'super-release-darwin-arm64'
+      - 'super-release-darwin-x64'
+      - 'super-release-linux-arm64'
+      - 'super-release-linux-x64'
+      - 'super-release-windows-x64'
   - name: exec
     packages:
-      - "super-release"
+      - "super-release-root"
     options:
       prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml && cargo update super-release"
       files:
