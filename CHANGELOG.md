@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.3.0] - 2026-04-06
+
+### 🚀 Features
+
+- Adjusted packaging
+- Adjusted packaging
+- Package every arch separately
+
+### 🐛 Bug Fixes
+
+- Exclude root package
+- Make sure to install all debs
+- Adjusted path's
+- Adjusted repo structure
+
+### ⚙️ Miscellaneous Tasks
+
+- Bump
+- *(release)* Super-release-windows-x64@1.1.0, super-release-linux-arm64@1.1.0, super-release-darwin-arm64@1.1.0, super-release@1.3.0, super-release-darwin-x64@1.1.0, super-release-linux-x64@1.1.0 [skip ci]
 ## [1.2.0] - 2026-04-04
 
 ### 🚀 Features
