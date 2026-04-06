@@ -4,7 +4,7 @@
   "os": ["darwin"],
   "cpu": ["arm64"],
   "scripts": {
-    "prepare": "tar xzf ../../artifacts/super-release-darwin-aarch64/super-release-darwin-aarch64.tar.gz && mv super-release super-release-darwin-arm64"
+    "prepublish": "tar xzf ../../artifacts/super-release-darwin-aarch64/super-release-darwin-aarch64.tar.gz && mv super-release super-release-darwin-arm64"
   },
   "repository": {
     "type": "git",
