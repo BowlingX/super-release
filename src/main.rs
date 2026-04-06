@@ -316,14 +316,26 @@ fn main() -> Result<()> {
             commit::BumpLevel::None => console::Color::White,
         };
 
-        printfl!(
-            "   {} {} {} -> {} ({})",
-            style("*").dim(),
-            style(&release.package_name).bold(),
-            style(&release.current_version).dim(),
-            style(&release.next_version).bold().fg(bump_color),
-            style(&release.bump).fg(bump_color)
-        );
+        if let Some(ref reason) = release.propagated_from {
+            printfl!(
+                "   {} {} {} -> {} ({}, dependency updated: {})",
+                style("*").dim(),
+                style(&release.package_name).bold(),
+                style(&release.current_version).dim(),
+                style(&release.next_version).bold().fg(bump_color),
+                style(&release.bump).fg(bump_color),
+                style(reason).cyan()
+            );
+        } else {
+            printfl!(
+                "   {} {} {} -> {} ({})",
+                style("*").dim(),
+                style(&release.package_name).bold(),
+                style(&release.current_version).dim(),
+                style(&release.next_version).bold().fg(bump_color),
+                style(&release.bump).fg(bump_color)
+            );
+        }
 
         verbosefl!(verbose_mode, {
             const MAX_COMMITS_SHOWN: usize = 10;

@@ -20,6 +20,9 @@ pub struct PackageRelease {
     pub bump: BumpLevel,
     pub commits: Vec<ConventionalCommit>,
     pub is_root: bool,
+    /// If this release was triggered by a dependency update rather than direct
+    /// commits, contains the dependency chain that caused the propagation.
+    pub propagated_from: Option<String>,
 }
 
 struct PkgTagInfo {
@@ -234,6 +237,7 @@ pub fn determine_releases(
                     bump,
                     commits: pkg_commits,
                     is_root: pkg.is_root,
+                    propagated_from: None,
                 }))
             } else {
                 Ok(None)
@@ -241,7 +245,75 @@ pub fn determine_releases(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(releases.into_iter().flatten().collect())
+    let mut releases: Vec<PackageRelease> = releases.into_iter().flatten().collect();
+
+    // 7. Propagate releases to dependents: if package X is released and package Y
+    //    depends on X (via local_dependencies), Y should also get a patch release.
+    //    This is recursive — if Y propagates, Z depending on Y also propagates.
+    propagate_to_dependents(&mut releases, packages, &tag_infos);
+
+    Ok(releases)
+}
+
+/// Recursively propagate releases through the reverse dependency graph.
+/// If package A is being released and package B has A in its `local_dependencies`,
+/// B gets a patch release (unless it already has a release from direct commits).
+fn propagate_to_dependents(
+    releases: &mut Vec<PackageRelease>,
+    packages: &[Package],
+    tag_infos: &[PkgTagInfo],
+) {
+    // Build reverse dependency map: dep_name -> vec of dependent package indices
+    let mut reverse_deps: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, pkg) in packages.iter().enumerate() {
+        for dep_name in pkg.local_dependencies.keys() {
+            reverse_deps.entry(dep_name.as_str()).or_default().push(i);
+        }
+    }
+
+    // Track which packages already have a release (won't be overridden)
+    let mut released: HashSet<String> = releases.iter().map(|r| r.package_name.clone()).collect();
+
+    // BFS queue: (package_name_that_triggered, chain_so_far)
+    // e.g. ("A", "A") -> when A's dependent B is found -> ("B", "A -> B")
+    let mut queue: std::collections::VecDeque<(String, String)> = releases
+        .iter()
+        .map(|r| (r.package_name.clone(), r.package_name.clone()))
+        .collect();
+
+    while let Some((trigger_name, chain)) = queue.pop_front() {
+        let Some(dependents) = reverse_deps.get(trigger_name.as_str()) else {
+            continue;
+        };
+        for &dep_idx in dependents {
+            let dep_pkg = &packages[dep_idx];
+            if released.contains(&dep_pkg.name) {
+                continue;
+            }
+
+            released.insert(dep_pkg.name.clone());
+
+            let tag_info = &tag_infos[dep_idx];
+            let mut next_version = tag_info.current_version.clone();
+            next_version.patch += 1;
+            next_version.pre = Prerelease::EMPTY;
+            next_version.build = semver::BuildMetadata::EMPTY;
+
+            let next_chain = format!("{} -> {}", chain, dep_pkg.name);
+
+            releases.push(PackageRelease {
+                package_name: dep_pkg.name.clone(),
+                current_version: tag_info.current_version.clone(),
+                next_version,
+                bump: BumpLevel::Patch,
+                commits: Vec::new(),
+                is_root: dep_pkg.is_root,
+                propagated_from: Some(chain.clone()),
+            });
+
+            queue.push_back((dep_pkg.name.clone(), next_chain));
+        }
+    }
 }
 
 /// Find the oldest tag among all packages by comparing commit timestamps.

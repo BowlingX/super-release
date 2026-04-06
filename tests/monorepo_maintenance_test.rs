@@ -237,8 +237,9 @@ steps: []
 }
 
 #[test]
-fn test_monorepo_maintenance_no_cascade_across_packages() {
-    // Scenario 3: @acme/app depends on @acme/lib. Fix in lib should not cascade to app.
+fn test_monorepo_maintenance_cascade_to_dependent() {
+    // Scenario 3: @acme/app depends on @acme/lib. Fix in lib should cascade to app
+    // because app declares lib as a dependency.
     let dir = TempDir::new().unwrap();
     let root = dir.path();
 
@@ -314,10 +315,15 @@ steps: []
         "Should release @acme/lib 1.0.1:\n{}",
         stdout
     );
-    // app should NOT be released — no changes in its directory
+    // app SHOULD be released as a patch because its dependency @acme/lib changed
     assert!(
-        !stdout.contains("@acme/app/v"),
-        "Should not release @acme/app (no changes in its files):\n{}",
+        stdout.contains("@acme/app") && stdout.contains("1.0.1"),
+        "Should release @acme/app 1.0.1 (dependency propagation):\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("dependency updated"),
+        "Should indicate the release was propagated from a dependency:\n{}",
         stdout
     );
 }

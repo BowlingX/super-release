@@ -384,6 +384,7 @@ mod tests {
                 bump: crate::commit::BumpLevel::Minor,
                 commits: vec![],
                 is_root: false,
+                propagated_from: None,
             })
             .collect();
 
