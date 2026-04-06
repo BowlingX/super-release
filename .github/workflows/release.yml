@@ -45,8 +45,8 @@ jobs:
 
       - name: Bundle artifact hashes into npm package
         run: |
-          find artifacts -name '*.sha256' -exec cp {} npm/bin/ \;
-          ls -la npm/bin/*.sha256
+          find artifacts -name '*.sha256' -exec cp {} packages/super-release/bin/ \;
+          ls -la packages/super-release/bin/*.sha256
 
       - name: Run super-release
         run: |

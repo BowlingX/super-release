@@ -3,15 +3,15 @@
   "type": "module",
   "version": "1.2.0",
   "bin": {
-    "super-release": "npm/bin/super-release.js"
+    "super-release": "bin/super-release.js"
   },
   "description": "A fast semantic-release alternative for monorepos, written in Rust",
   "engines": {
     "node": ">=20"
   },
   "files": [
-    "npm/bin",
-    "README.md"
+    "bin",
+    "../../README.md"
   ],
   "keywords": [
     "semantic-release",
@@ -30,7 +30,7 @@
     "url": "git+https://github.com/BowlingX/super-release.git"
   },
   "scripts": {
-    "super-release": "node npm/bin/super-release.js"
+    "super-release": "node bin/super-release.js"
   },
   "optionalDependencies": {
     "super-release-linux-x64": "workspace:*",
