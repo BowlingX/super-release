@@ -7,7 +7,7 @@ branches:
 
 tag_format: "v{version}"
 
-ignore:
+exclude:
   - 'super-release-root'
 
 dependencies:
