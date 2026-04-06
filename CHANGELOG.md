@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.3.1] - 2026-04-06
+
+### 🐛 Bug Fixes
+
+- Make sure files are executable
 ## [1.3.0] - 2026-04-06
 
 ### 🚀 Features
