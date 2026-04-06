@@ -11,7 +11,7 @@
   },
   "files": [
     "bin",
-    "../../README.md"
+    "README.md"
   ],
   "keywords": [
     "semantic-release",
@@ -30,6 +30,7 @@
     "url": "git+https://github.com/BowlingX/super-release.git"
   },
   "scripts": {
+    "prepublish": "cp ../../README.md README.md",
     "super-release": "node bin/super-release.js"
   },
   "optionalDependencies": {
