@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.0] - 2026-04-06
+
+### 🚀 Features
+
+- Add dependency propagation
+
+### ⚙️ Miscellaneous Tasks
+
+- Fmt
 ## [1.3.1] - 2026-04-06
 
 ### 🐛 Bug Fixes
