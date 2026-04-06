@@ -6,6 +6,10 @@
   "scripts": {
     "prepare": "tar xzf ../../artifacts/super-release-darwin-x86_64/super-release-darwin-x86_64.tar.gz && mv super-release super-release-darwin-x64"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "files": [
     "super-release-darwin-x64"
   ],

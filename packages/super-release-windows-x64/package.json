@@ -6,6 +6,10 @@
   "scripts": {
     "prepare": "unzip ../../artifacts/super-release-windows-x86_64/super-release-windows-x86_64.zip && mv super-release.exe super-release-windows-x64.exe"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "files": [
     "super-release-windows-x64.exe"
   ],

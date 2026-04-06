@@ -6,6 +6,10 @@
   "scripts": {
     "prepare": "tar xzf ../../artifacts/super-release-linux-aarch64/super-release-linux-aarch64.tar.gz && mv super-release super-release-linux-arm64"
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "files": [
     "super-release-linux-arm64"
   ],
