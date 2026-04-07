@@ -1,23 +1,27 @@
 {
   "name": "super-release-windows-x64",
   "version": "1.3.0",
-  "os": ["win32"],
-  "cpu": ["x64"],
-  "scripts": {
-    "prepublish": "unzip ../../artifacts/super-release-windows-x86_64/super-release-windows-x86_64.zip && mv super-release.exe super-release-windows-x64.exe"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/BowlingX/super-release.git"
+  },
+  "files": [
+    "super-release-windows-x64.exe"
+  ],
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "exports": {
+    ".": "./super-release-windows-x64.exe"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "files": [
-    "super-release-windows-x64.exe"
-  ],
-  "exports": {
-    ".": "./super-release-windows-x64.exe"
+  "scripts": {
+    "prepublish": "unzip ../../artifacts/super-release-windows-x86_64/super-release-windows-x86_64.zip && mv super-release.exe super-release-windows-x64.exe"
   }
 }

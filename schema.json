@@ -59,15 +59,14 @@
       "type": ["array", "null"],
       "default": [],
       "items": { "type": "string" },
-      "examples": [["yarn.lock", "pnpm-lock.yaml", "package.json", ".github/**"]]
+      "examples": [
+        ["yarn.lock", "pnpm-lock.yaml", "package.json", ".github/**"]
+      ]
     },
     "steps": {
       "description": "Ordered list of steps to execute",
       "type": ["array", "null"],
-      "default": [
-        { "name": "changelog" },
-        { "name": "npm" }
-      ],
+      "default": [{ "name": "changelog" }, { "name": "npm" }],
       "items": {
         "$ref": "#/$defs/stepConfig"
       }
@@ -89,10 +88,7 @@
         },
         "prerelease": {
           "description": "Prerelease channel. true = use branch name as channel, string = fixed channel name, false/absent = stable",
-          "oneOf": [
-            { "type": "boolean" },
-            { "type": "string" }
-          ],
+          "oneOf": [{ "type": "boolean" }, { "type": "string" }],
           "examples": [true, "beta", "next", "rc"]
         },
         "maintenance": {
@@ -144,15 +140,21 @@
       "allOf": [
         {
           "if": { "properties": { "name": { "const": "changelog" } } },
-          "then": { "properties": { "options": { "$ref": "#/$defs/changelogOptions" } } }
+          "then": {
+            "properties": { "options": { "$ref": "#/$defs/changelogOptions" } }
+          }
         },
         {
           "if": { "properties": { "name": { "const": "npm" } } },
-          "then": { "properties": { "options": { "$ref": "#/$defs/npmOptions" } } }
+          "then": {
+            "properties": { "options": { "$ref": "#/$defs/npmOptions" } }
+          }
         },
         {
           "if": { "properties": { "name": { "const": "exec" } } },
-          "then": { "properties": { "options": { "$ref": "#/$defs/execOptions" } } }
+          "then": {
+            "properties": { "options": { "$ref": "#/$defs/execOptions" } }
+          }
         }
       ]
     },

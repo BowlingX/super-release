@@ -5,8 +5,7 @@ branches:
   - main
   - master
 
-tag_format: "v{version}"
-
+tag_format: 'v{version}'
 
 dependencies:
   - pnpm-lock.yaml
@@ -20,7 +19,7 @@ dependencies:
 steps:
   - name: changelog
     packages:
-      - "super-release-root"
+      - 'super-release-root'
   - name: npm
     options:
       provenance: true
@@ -33,13 +32,13 @@ steps:
       - 'super-release-windows-x64'
   - name: exec
     packages:
-      - "super-release-root"
+      - 'super-release-root'
     options:
-      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml && cargo update super-release"
+      prepare_cmd: 'sed -i'''' -e ''s/^version = .*/version = "{version}"/'' Cargo.toml && cargo update super-release'
       files:
         - Cargo.toml
         - Cargo.lock
 
 git:
-  commit_message: "chore(release): {releases} [skip ci]"
+  commit_message: 'chore(release): {releases} [skip ci]'
   push: false

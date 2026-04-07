@@ -1,23 +1,27 @@
 {
   "name": "super-release-darwin-arm64",
   "version": "1.3.1",
-  "os": ["darwin"],
-  "cpu": ["arm64"],
-  "scripts": {
-    "prepublish": "tar xzf ../../artifacts/super-release-darwin-aarch64/super-release-darwin-aarch64.tar.gz && mv super-release super-release-darwin-arm64"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/BowlingX/super-release.git"
+  },
+  "files": [
+    "super-release-darwin-arm64"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "exports": {
+    ".": "./super-release-darwin-arm64"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
-  "files": [
-    "super-release-darwin-arm64"
-  ],
-  "exports": {
-    ".": "./super-release-darwin-arm64"
+  "scripts": {
+    "prepublish": "tar xzf ../../artifacts/super-release-darwin-aarch64/super-release-darwin-aarch64.tar.gz && mv super-release super-release-darwin-arm64 && chmod +x super-release-darwin-arm64"
   }
 }

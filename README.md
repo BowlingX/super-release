@@ -103,7 +103,7 @@ In monorepos, use `--package` to select which package: `super-release --show-nex
 ## Conventional Commits
 
 | Commit                                                | Bump       |
-|-------------------------------------------------------|------------|
+| ----------------------------------------------------- | ---------- |
 | `fix: ...`                                            | patch      |
 | `feat: ...`                                           | minor      |
 | `feat!: ...` or `BREAKING CHANGE:` in footer          | major      |
@@ -121,15 +121,17 @@ to bypass validation.
 For editor autocompletion:
 
 ```yaml
-# yaml-language-server: $schema=https://raw.githubusercontent.com/bowlingx/super-release/main/schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/bowlingx/super-release/v1.4.0/schema.json
 ```
 
 ```jsonc
 // .release.jsonc
 {
-  "$schema": "https://raw.githubusercontent.com/bowlingx/super-release/main/schema.json"
+  "$schema": "https://raw.githubusercontent.com/bowlingx/super-release/v1.4.0/schema.json",
 }
 ```
+
+Or, if you installed it locally directly via `./node_modules/super-release/config-schema.json`
 
 ### Full Example
 
@@ -137,22 +139,22 @@ For editor autocompletion:
 branches:
   - main
   - name: next
-    channel: next                  # publishes to "next" npm dist-tag
+    channel: next # publishes to "next" npm dist-tag
   - name: next-major
     channel: next-major
   - name: beta
     prerelease: beta
-  - name: "test-*"
+  - name: 'test-*'
     prerelease: true
-    packages: [ "@acme/core" ]    # only release core on test branches
-  - name: "1.x"
+    packages: ['@acme/core'] # only release core on test branches
+  - name: '1.x'
     maintenance: true
 
-tag_format: "v{version}"
-tag_format_package: "{name}/v{version}"
+tag_format: 'v{version}'
+tag_format_package: '{name}/v{version}'
 
 packages:
-  - "@acme/*"
+  - '@acme/*'
 
 exclude:
   - my-monorepo-root
@@ -164,9 +166,9 @@ dependencies:
 
 # Files to ignore -- commits touching only these won't trigger releases
 ignore:
-  - "README.md"
-  - "docs/**"
-  - "**/*.md"
+  - 'README.md'
+  - 'docs/**'
+  - '**/*.md'
 
 steps:
   - name: changelog
@@ -175,13 +177,13 @@ steps:
       provenance: true
   - name: exec
     options:
-      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"
+      prepare_cmd: 'sed -i'''' -e ''s/^version = .*/version = "{version}"/'' Cargo.toml'
       files:
         - Cargo.toml
         - Cargo.lock
 
 git:
-  commit_message: "chore(release): {releases} [skip ci]"
+  commit_message: 'chore(release): {releases} [skip ci]'
   push: false
   remote: origin
 ```
@@ -194,7 +196,7 @@ Defines which branches can produce releases. Only configured branches are allowe
 exits cleanly.
 
 | Form                                            | Type                                | Example versions                 |
-|-------------------------------------------------|-------------------------------------|----------------------------------|
+| ----------------------------------------------- | ----------------------------------- | -------------------------------- |
 | `- main`                                        | Stable (primary)                    | `1.0.0`, `1.1.0`, `2.0.0`        |
 | `- name: next`<br>`  channel: next`             | Stable (next channel)               | `1.1.0` on `next` dist-tag       |
 | `- name: next-major`<br>`  channel: next-major` | Stable (next-major channel)         | `2.0.0` on `next-major` dist-tag |
@@ -210,11 +212,11 @@ non-primary branch should set a `channel` so it publishes to a different npm dis
 
 ```yaml
 branches:
-  - main                          # primary: publishes to "latest"
+  - main # primary: publishes to "latest"
   - name: next
-    channel: next                 # publishes to "next" dist-tag
+    channel: next # publishes to "next" dist-tag
   - name: next-major
-    channel: next-major           # publishes to "next-major" dist-tag
+    channel: next-major # publishes to "next-major" dist-tag
 ```
 
 **Version collision detection**: If a branch tries to release a version that already exists as a tag (e.g. `next`
@@ -234,7 +236,7 @@ If the branch name doesn't follow the `N.x` / `N.N.x` pattern, set `range` expli
 branches:
   - name: legacy-support
     maintenance: true
-    range: "1.5.x"          # cap to 1.5.x patch range
+    range: '1.5.x' # cap to 1.5.x patch range
 ```
 
 In monorepos, packages whose version is outside the maintenance range are automatically skipped. For example, on branch
@@ -246,11 +248,11 @@ Branches can filter which packages they release with `packages`:
 
 ```yaml
 branches:
-  - name: "test-*"
+  - name: 'test-*'
     prerelease: true
     packages: # only release these on test branches
-      - "@acme/core"
-      - "@acme/utils"
+      - '@acme/core'
+      - '@acme/utils'
 ```
 
 **Tag filtering by branch**: Stable branches only see stable tags. Prerelease branches see their own channel's tags plus
@@ -277,7 +279,7 @@ dependencies:
   - yarn.lock
   - pnpm-lock.yaml
   - package.json
-  - ".github/**"
+  - '.github/**'
 ```
 
 #### `ignore`
@@ -287,10 +289,10 @@ both ignored and non-ignored files, only the non-ignored files determine which p
 
 ```yaml
 ignore:
-  - "README.md"
-  - "docs/**"
-  - "**/*.md"
-  - ".prettierrc"
+  - 'README.md'
+  - 'docs/**'
+  - '**/*.md'
+  - '.prettierrc'
 ```
 
 #### `packages` / `exclude`
@@ -299,7 +301,7 @@ Filter which packages are released. `packages` is an allow-list (glob patterns),
 
 ```yaml
 packages:
-  - "@acme/*"
+  - '@acme/*'
 exclude:
   - my-monorepo-root
 ```
@@ -317,23 +319,23 @@ steps:
       preview_lines: 20
 
   - name: npm
-    packages: [ "@acme/*" ]       # only publish @acme packages
-    branches: [ "main", "beta" ]  # only run on main and beta branches
+    packages: ['@acme/*'] # only publish @acme packages
+    branches: ['main', 'beta'] # only run on main and beta branches
     options:
       access: public
       provenance: true
       registry: https://registry.npmjs.org
-      tag: next                 # dist-tag (default: auto from prerelease channel)
-      publish_args: [ "--otp=123456" ]
-      package_manager: yarn     # force specific PM (default: auto-detect)
-      check_registry: true      # check if version exists before publishing (default: true)
+      tag: next # dist-tag (default: auto from prerelease channel)
+      publish_args: ['--otp=123456']
+      package_manager: yarn # force specific PM (default: auto-detect)
+      check_registry: true # check if version exists before publishing (default: true)
 
   - name: exec
-    packages: [ "my-rust-lib" ]
+    packages: ['my-rust-lib']
     options:
-      prepare_cmd: "sed -i'' -e 's/^version = .*/version = \"{version}\"/' Cargo.toml"
-      publish_cmd: "cargo publish"
-      files: [ Cargo.toml, Cargo.lock ]   # include in git commit
+      prepare_cmd: 'sed -i'''' -e ''s/^version = .*/version = "{version}"/'' Cargo.toml'
+      publish_cmd: 'cargo publish'
+      files: [Cargo.toml, Cargo.lock] # include in git commit
 ```
 
 Each step can be scoped:
@@ -344,7 +346,7 @@ Each step can be scoped:
   For example, `branches: ["main"]` ensures a step only runs on the main branch.
 
 | Step        | Prepare                                            | Publish                                                |
-|-------------|----------------------------------------------------|--------------------------------------------------------|
+| ----------- | -------------------------------------------------- | ------------------------------------------------------ |
 | `changelog` | Generates/updates changelog per package (parallel) | --                                                     |
 | `npm`       | --                                                 | Publishes packages (parallel within dependency levels) |
 | `exec`      | Runs custom shell command per package              | Runs custom shell command per package                  |
@@ -360,8 +362,8 @@ Core git behavior after all steps run. Not a step -- always runs.
 
 ```yaml
 git:
-  commit_message: "chore(release): {releases} [skip ci]"
-  push: false          # push commit + tags to remote
+  commit_message: 'chore(release): {releases} [skip ci]'
+  push: false # push commit + tags to remote
   remote: origin
 ```
 
@@ -413,7 +415,7 @@ Use `packages` (allow-list) and `exclude` (deny-list) at the top level to contro
 
 ```yaml
 packages:
-  - "@acme/*"        # only release @acme-scoped packages
+  - '@acme/*' # only release @acme-scoped packages
 exclude:
   - my-monorepo-root # skip the root package
 ```
@@ -445,10 +447,10 @@ You can also use per-branch `packages` filters for explicit control:
 
 ```yaml
 branches:
-  - name: "1.x"
+  - name: '1.x'
     maintenance: true
     packages:
-      - "@acme/utils"    # only release utils on this maintenance branch
+      - '@acme/utils' # only release utils on this maintenance branch
 ```
 
 ## Performance

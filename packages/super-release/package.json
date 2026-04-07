@@ -1,43 +1,44 @@
 {
   "name": "super-release",
-  "type": "module",
   "version": "1.5.2",
-  "bin": {
-    "super-release": "bin/super-release.js"
-  },
   "description": "A fast semantic-release alternative for monorepos, written in Rust",
-  "engines": {
-    "node": ">=20"
-  },
-  "files": [
-    "bin",
-    "README.md"
-  ],
   "keywords": [
-    "semantic-release",
+    "changelog",
+    "conventional-commits",
     "monorepo",
     "release",
-    "changelog",
-    "conventional-commits"
+    "semantic-release"
   ],
   "license": "MIT",
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/BowlingX/super-release.git"
   },
+  "bin": {
+    "super-release": "bin/super-release.js"
+  },
+  "files": [
+    "bin",
+    "config-schema.json",
+    "README.md"
+  ],
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "prepublish": "cp ../../README.md README.md",
+    "prepublish": "cp ../../README.md README.md && cp ../../schema.json config-schema.json",
     "super-release": "node bin/super-release.js"
   },
   "optionalDependencies": {
-    "super-release-linux-x64": "workspace:*",
-    "super-release-linux-arm64": "workspace:*",
-    "super-release-darwin-x64": "workspace:*",
     "super-release-darwin-arm64": "workspace:*",
+    "super-release-darwin-x64": "workspace:*",
+    "super-release-linux-arm64": "workspace:*",
+    "super-release-linux-x64": "workspace:*",
     "super-release-windows-x64": "workspace:*"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
