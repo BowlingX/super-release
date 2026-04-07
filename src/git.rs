@@ -286,6 +286,29 @@ pub fn get_commits_since(
     Ok(commits)
 }
 
+/// Find the commit OID that first introduced a file (e.g. a package manifest).
+/// Returns `None` if the file has no git history (uncommitted / not found).
+pub fn find_file_introduction_oid(
+    _repo: &Repository,
+    repo_root: &Path,
+    file_path: &Path,
+) -> Option<git2::Oid> {
+    use std::process::Command;
+
+    // `git log --diff-filter=A --format=%H -- <path>` returns the commit(s)
+    // that added the file. The last line is the original introduction commit.
+    let output = Command::new("git")
+        .args(["log", "--diff-filter=A", "--format=%H", "--"])
+        .arg(file_path.to_str()?)
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let last_hash = stdout.trim().lines().last()?;
+    git2::Oid::from_str(last_hash).ok()
+}
+
 /// Fetch the remote tracking branch and check if local is behind.
 /// Returns an error if the remote has commits not present locally.
 pub fn check_branch_up_to_date(

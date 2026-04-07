@@ -393,6 +393,214 @@ fn test_first_release_no_prior_tags() {
 }
 
 #[test]
+fn test_new_package_added_later_only_gets_own_commits() {
+    // Scenario: monorepo with an existing released package. A new package is added later.
+    // The new package should only see commits since its introduction — not the full history.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    // Root + existing package
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "mono-root", "version": "0.0.0", "private": true}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join(".release.yaml"),
+        "branches:\n  - main\nexclude:\n  - mono-root\nsteps:\n  - name: changelog\n",
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("packages/core/src")).unwrap();
+    fs::write(
+        root.join("packages/core/package.json"),
+        r#"{"name": "@test/core", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/core/src/index.ts"), "// core").unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: initial core"]);
+    git(root, &["tag", "-a", "@test/core/v1.0.0", "-m", "@test/core/v1.0.0"]);
+
+    // Several more commits on core (these should NOT appear in the new package's changelog)
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: core feature alpha"]);
+
+    fs::write(root.join("packages/core/src/index.ts"), "// core v3").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: core bugfix"]);
+
+    // NOW add a new package
+    fs::create_dir_all(root.join("packages/utils/src")).unwrap();
+    fs::write(
+        root.join("packages/utils/package.json"),
+        r#"{"name": "@test/utils", "version": "0.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/utils/src/index.ts"), "// utils").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: add utils package"]);
+
+    // One more commit in the new package
+    fs::write(root.join("packages/utils/src/index.ts"), "// utils v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: utils improvement"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Should succeed:\nstdout: {}\nstderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // utils should have its own commits
+    assert!(
+        stdout.contains("@test/utils") && stdout.contains("add utils package"),
+        "Should include utils' introduction commit:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("utils improvement"),
+        "Should include utils' follow-up commit:\n{}",
+        stdout
+    );
+
+    // Extract the utils changelog section to verify it doesn't contain core commits.
+    // The changelog preview appears after "(@test/utils)" and before the next ">>" section.
+    let utils_changelog = stdout
+        .split("(@test/utils)")
+        .nth(1)
+        .and_then(|s| s.split(">>").next())
+        .unwrap_or("");
+
+    assert!(
+        !utils_changelog.contains("core feature alpha"),
+        "Utils changelog should NOT include core's commits:\n{}",
+        utils_changelog
+    );
+    assert!(
+        !utils_changelog.contains("core bugfix"),
+        "Utils changelog should NOT include core's bugfix:\n{}",
+        utils_changelog
+    );
+    assert!(
+        !utils_changelog.contains("initial core"),
+        "Utils changelog should NOT include core's initial commit:\n{}",
+        utils_changelog
+    );
+}
+
+#[test]
+fn test_new_package_ignores_old_global_dependency_commits() {
+    // Scenario: global dependency files (pnpm-lock.yaml) were changed many times historically.
+    // A new package added later should NOT get those old global-dep commits.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "mono-root", "version": "0.0.0", "private": true}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join(".release.yaml"),
+        "branches:\n  - main\nexclude:\n  - mono-root\ndependencies:\n  - pnpm-lock.yaml\nsteps: []\n",
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("packages/core/src")).unwrap();
+    fs::write(
+        root.join("packages/core/package.json"),
+        r#"{"name": "@test/core", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/core/src/index.ts"), "// core").unwrap();
+    fs::write(root.join("pnpm-lock.yaml"), "lockfile-v1").unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: initial setup"]);
+    git(root, &["tag", "-a", "@test/core/v1.0.0", "-m", "@test/core/v1.0.0"]);
+
+    // Historical global dependency changes (touching pnpm-lock.yaml)
+    fs::write(root.join("pnpm-lock.yaml"), "lockfile-v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: upgrade dependencies"]);
+
+    fs::write(root.join("pnpm-lock.yaml"), "lockfile-v3").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: another dep upgrade"]);
+
+    // Add a new package AFTER all those global dep changes
+    fs::create_dir_all(root.join("packages/newpkg/src")).unwrap();
+    fs::write(
+        root.join("packages/newpkg/package.json"),
+        r#"{"name": "@test/newpkg", "version": "0.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/newpkg/src/index.ts"), "// new").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: add new package"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Should succeed:\nstdout: {}\nstderr: {}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // newpkg should only see its own introduction commit
+    assert!(
+        stdout.contains("@test/newpkg") && stdout.contains("add new package"),
+        "Should include newpkg's commit:\n{}",
+        stdout
+    );
+
+    // Extract newpkg's section to verify no old global dep commits leaked in.
+    let newpkg_section = stdout
+        .split("@test/newpkg")
+        .nth(1)
+        .and_then(|s| s.split(">>").next())
+        .unwrap_or("");
+
+    assert!(
+        !newpkg_section.contains("upgrade dependencies"),
+        "Newpkg section should NOT include old global dep commit:\n{}",
+        newpkg_section
+    );
+    assert!(
+        !newpkg_section.contains("another dep upgrade"),
+        "Newpkg section should NOT include old global dep commit:\n{}",
+        newpkg_section
+    );
+}
+
+#[test]
 fn test_dry_run_shows_new_tag_format() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();

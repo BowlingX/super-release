@@ -32,6 +32,9 @@ struct PkgTagInfo {
     /// produced `current_version` on prerelease branches.
     cutoff_oid: Option<git2::Oid>,
     cutoff_tag: Option<String>,
+    /// When true, the cutoff commit itself is included (used for first-release
+    /// packages where the cutoff is the introduction commit, not a release tag).
+    cutoff_inclusive: bool,
 }
 
 /// Determine the next version for all packages based on commits since their last release.
@@ -82,13 +85,25 @@ pub fn determine_releases(
                         current_version,
                         cutoff_oid: oid,
                         cutoff_tag: Some(tag_name.clone()),
+                        cutoff_inclusive: false,
                     })
                 }
-                None => Ok(PkgTagInfo {
-                    current_version: pkg.version.clone(),
-                    cutoff_oid: None,
-                    cutoff_tag: None,
-                }),
+                None => {
+                    // No tag exists — this is a first release. Use the commit that
+                    // introduced the package manifest as the cutoff so we don't
+                    // attribute the entire repo history to this new package.
+                    let intro_oid = git::find_file_introduction_oid(
+                        repo,
+                        repo_path,
+                        &pkg.manifest_path,
+                    );
+                    Ok(PkgTagInfo {
+                        current_version: pkg.version.clone(),
+                        cutoff_oid: intro_oid,
+                        cutoff_tag: None,
+                        cutoff_inclusive: true,
+                    })
+                }
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -189,12 +204,14 @@ pub fn determine_releases(
             let cutoff_idx = tag_info
                 .cutoff_oid
                 .and_then(|cutoff| oid_to_idx.get(&cutoff).copied());
+            let inclusive = tag_info.cutoff_inclusive;
 
             let pkg_commits: Vec<ConventionalCommit> = pkg_commit_indices
                 .get(pkg.name.as_str())
                 .map(|idxs| {
                     idxs.iter()
                         .filter(|&&i| match cutoff_idx {
+                            Some(cut) if inclusive => i <= cut,
                             Some(cut) => i < cut,
                             None => true,
                         })
