@@ -92,11 +92,8 @@ pub fn determine_releases(
                     // No tag exists — this is a first release. Use the commit that
                     // introduced the package manifest as the cutoff so we don't
                     // attribute the entire repo history to this new package.
-                    let intro_oid = git::find_file_introduction_oid(
-                        repo,
-                        repo_path,
-                        &pkg.manifest_path,
-                    );
+                    let intro_oid =
+                        git::find_file_introduction_oid(repo, repo_path, &pkg.manifest_path);
                     Ok(PkgTagInfo {
                         current_version: pkg.version.clone(),
                         cutoff_oid: intro_oid,

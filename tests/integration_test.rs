@@ -425,7 +425,10 @@ fn test_new_package_added_later_only_gets_own_commits() {
 
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "feat: initial core"]);
-    git(root, &["tag", "-a", "@test/core/v1.0.0", "-m", "@test/core/v1.0.0"]);
+    git(
+        root,
+        &["tag", "-a", "@test/core/v1.0.0", "-m", "@test/core/v1.0.0"],
+    );
 
     // Several more commits on core (these should NOT appear in the new package's changelog)
     fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
@@ -537,7 +540,10 @@ fn test_new_package_ignores_old_global_dependency_commits() {
 
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "feat: initial setup"]);
-    git(root, &["tag", "-a", "@test/core/v1.0.0", "-m", "@test/core/v1.0.0"]);
+    git(
+        root,
+        &["tag", "-a", "@test/core/v1.0.0", "-m", "@test/core/v1.0.0"],
+    );
 
     // Historical global dependency changes (touching pnpm-lock.yaml)
     fs::write(root.join("pnpm-lock.yaml"), "lockfile-v2").unwrap();
