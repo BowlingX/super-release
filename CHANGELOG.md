@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.6.0] - 2026-04-07
+
+### 🚀 Features
+
+- When introducing new packages to a repository, make sure to only include new commits since the package was introduced into it's own release history
+
+### ⚙️ Miscellaneous Tasks
+
+- Fmt
 ## [1.5.0] - 2026-04-07
 
 ### 🚀 Features
