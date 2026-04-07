@@ -6,8 +6,11 @@
     "url": "git+https://github.com/BowlingX/super-release.git"
   },
   "files": [
-    "super-release-darwin-arm64"
+    "bin"
   ],
+  "bin": {
+    "super-release": "bin/super-release"
+  },
   "os": [
     "darwin"
   ],
@@ -15,13 +18,13 @@
     "arm64"
   ],
   "exports": {
-    ".": "./super-release-darwin-arm64"
+    ".": "./bin/super-release"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
   "scripts": {
-    "prepublish": "tar xzf ../../artifacts/super-release-darwin-aarch64/super-release-darwin-aarch64.tar.gz && mv super-release super-release-darwin-arm64 && chmod +x super-release-darwin-arm64"
+    "prepublish": "mkdir -p bin && tar xzf ../../artifacts/super-release-darwin-aarch64/super-release-darwin-aarch64.tar.gz -C bin"
   }
 }

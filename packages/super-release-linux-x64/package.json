@@ -6,9 +6,12 @@
     "url": "git+https://github.com/BowlingX/super-release.git"
   },
   "files": [
-    "super-release-linux-x64",
-    "super-release-linux-x64-musl"
+    "bin"
   ],
+  "bin": {
+    "super-release": "bin/super-release",
+    "super-release-musl": "bin/super-release-musl"
+  },
   "os": [
     "linux"
   ],
@@ -16,14 +19,14 @@
     "x64"
   ],
   "exports": {
-    ".": "./super-release-linux-x64",
-    "./musl": "./super-release-linux-x64-musl"
+    ".": "./bin/super-release",
+    "./musl": "./bin/super-release-musl"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
   "scripts": {
-    "prepublish": "tar xzf ../../artifacts/super-release-linux-x86_64/super-release-linux-x86_64.tar.gz && mv super-release super-release-linux-x64 && chmod +x super-release-linux-x64 && tar xzf ../../artifacts/super-release-linux-x86_64-musl/super-release-linux-x86_64-musl.tar.gz && mv super-release super-release-linux-x64-musl && chmod +x super-release-linux-x64-musl"
+    "prepublish": "mkdir -p bin && tar xzf ../../artifacts/super-release-linux-x86_64/super-release-linux-x86_64.tar.gz -C bin && tar xzf ../../artifacts/super-release-linux-x86_64-musl/super-release-linux-x86_64-musl.tar.gz && mv super-release bin/super-release-musl"
   }
 }

@@ -6,8 +6,11 @@
     "url": "git+https://github.com/BowlingX/super-release.git"
   },
   "files": [
-    "super-release-windows-x64.exe"
+    "bin"
   ],
+  "bin": {
+    "super-release": "bin/super-release.exe"
+  },
   "os": [
     "win32"
   ],
@@ -15,13 +18,13 @@
     "x64"
   ],
   "exports": {
-    ".": "./super-release-windows-x64.exe"
+    ".": "./bin/super-release.exe"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
   "scripts": {
-    "prepublish": "unzip ../../artifacts/super-release-windows-x86_64/super-release-windows-x86_64.zip && mv super-release.exe super-release-windows-x64.exe"
+    "prepublish": "mkdir -p bin && unzip ../../artifacts/super-release-windows-x86_64/super-release-windows-x86_64.zip -d bin"
   }
 }

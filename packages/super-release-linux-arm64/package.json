@@ -6,8 +6,11 @@
     "url": "git+https://github.com/BowlingX/super-release.git"
   },
   "files": [
-    "super-release-linux-arm64"
+    "bin"
   ],
+  "bin": {
+    "super-release": "bin/super-release"
+  },
   "os": [
     "linux"
   ],
@@ -15,13 +18,13 @@
     "arm64"
   ],
   "exports": {
-    ".": "./super-release-linux-arm64"
+    ".": "./bin/super-release"
   },
   "publishConfig": {
     "access": "public",
     "provenance": true
   },
   "scripts": {
-    "prepublish": "tar xzf ../../artifacts/super-release-linux-aarch64/super-release-linux-aarch64.tar.gz && mv super-release super-release-linux-arm64 && chmod +x super-release-linux-arm64"
+    "prepublish": "mkdir -p bin && tar xzf ../../artifacts/super-release-linux-aarch64/super-release-linux-aarch64.tar.gz -C bin"
   }
 }
