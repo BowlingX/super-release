@@ -1,6 +1,6 @@
 {
   "name": "super-release",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "A fast semantic-release alternative for monorepos, written in Rust",
   "keywords": [
     "changelog",
