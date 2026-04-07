@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.5.0] - 2026-04-07
+
+### 🚀 Features
+
+- Adjusted permissions, formatting, added schema to package
 ## [1.4.0] - 2026-04-06
 
 ### 🚀 Features
