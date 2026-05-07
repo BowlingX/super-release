@@ -1338,3 +1338,135 @@ steps: []
 }
 
 // ── Maintenance branch version collision tests ──
+
+/// Some authoring tools (e.g. GitHub's squash-merge API) write commit objects
+/// whose stored message body has no trailing newline. The git-log parser must
+/// still associate `files_changed` with such commits — otherwise releases get
+/// silently dropped because the per-package commit map ends up empty.
+#[test]
+fn test_release_detected_for_commit_without_trailing_newline_in_message() {
+    use std::io::Write;
+
+    fn git_capture(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// Create a commit whose stored message body has NO trailing newline.
+    /// `git commit-tree` reads the message verbatim from stdin.
+    fn commit_tree_verbatim(dir: &std::path::Path, parent: &str, msg_no_newline: &str) -> String {
+        let tree = git_capture(dir, &["write-tree"]);
+        let mut child = process::Command::new("git")
+            .args(["commit-tree", &tree, "-p", parent])
+            .current_dir(dir)
+            .stdin(process::Stdio::piped())
+            .stdout(process::Stdio::piped())
+            .stderr(process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(msg_no_newline.as_bytes())
+            .unwrap();
+        drop(child.stdin.take());
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "commit-tree failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-pkg", "version": "1.0.0"}"#,
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "// init").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches:
+  - main
+dependencies:
+  - 'src/**'
+steps: []
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+
+    fs::write(root.join("src/lib.rs"), "// patched").unwrap();
+    git(root, &["add", "."]);
+
+    let parent = git_capture(root, &["rev-parse", "HEAD"]);
+    let new_oid = commit_tree_verbatim(root, &parent, "fix: no trailing newline");
+    git(root, &["update-ref", "HEAD", &new_oid]);
+
+    // Sanity-check the bug shape: the stored message body must NOT end in \n.
+    let stored = git_capture(root, &["log", "--format=%B", "-1", &new_oid]);
+    let raw_out = process::Command::new("git")
+        .args(["log", "--format=[%B]", "-1", &new_oid])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let bracketed = String::from_utf8_lossy(&raw_out.stdout);
+    assert!(
+        bracketed.contains("[fix: no trailing newline]"),
+        "Expected stored body without trailing newline; got: {:?} ({})",
+        stored,
+        bracketed.trim()
+    );
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "should succeed:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("1.0.1"),
+        "should release 1.0.1 even when the fix commit's stored body has no trailing newline:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        !stdout.contains("No releases needed"),
+        "should NOT report no-releases for a fix commit touching src/lib.rs:\nstdout: {}",
+        stdout
+    );
+}

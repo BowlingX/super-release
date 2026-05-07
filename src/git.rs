@@ -193,13 +193,17 @@ pub fn get_commits_since(
     use std::io::BufReader;
     use std::process::{Command, Stdio};
 
-    // Format: each commit is separated by \x1e (record separator).
-    // Within each commit: HASH\tFULL_MESSAGE\x1e\nFILE1\nFILE2\n...
-    // The --name-only output follows after the format string.
+    // Each record is separated by \x1e (record separator). Within a record,
+    // the message section and the file list are separated by \x1f (unit
+    // separator) — `%n%x1f` forces a newline after `%B` and emits the
+    // sentinel regardless of whether the stored body ends with a newline.
+    // (Some authoring tools, e.g. GitHub's squash-merge API, omit the trailing
+    // newline; relying on blank-line counting silently drops `files_changed`
+    // for those commits.)
     let mut cmd = Command::new("git");
     cmd.args([
         "log",
-        "--format=%x1e%H%x09%B",
+        "--format=%x1e%H%x09%B%n%x1f",
         "--name-only",
         "--topo-order",
     ])
@@ -233,43 +237,36 @@ pub fn get_commits_since(
     let mut commits = Vec::new();
 
     for record in raw_output.split('\x1e') {
-        let record = record.trim();
         if record.is_empty() {
             continue;
         }
 
-        // Split into lines: first line is "HASH\tMESSAGE", then blank line, then file names
-        let mut lines = record.lines();
-        let Some(header) = lines.next() else {
+        // Split message section from file list on the explicit \x1f sentinel.
+        let Some((msg_section, files_section)) = record.split_once('\x1f') else {
+            continue;
+        };
+
+        let mut msg_lines = msg_section.lines();
+        let Some(header) = msg_lines.next() else {
             continue;
         };
         let Some((hash, first_msg_line)) = header.split_once('\t') else {
             continue;
         };
 
-        // Collect message lines (until we hit a blank line followed by file names)
         let mut message_lines = vec![first_msg_line.to_string()];
-        let mut files = Vec::new();
-        let mut past_message = false;
-
-        for line in lines {
-            if past_message {
-                if !line.is_empty() {
-                    files.push(line.to_string());
-                }
-            } else if line.is_empty() && message_lines.last().map(|l| l.is_empty()).unwrap_or(false)
-            {
-                // Double blank line or blank after message = start of file list
-                past_message = true;
-            } else {
-                message_lines.push(line.to_string());
-            }
+        for line in msg_lines {
+            message_lines.push(line.to_string());
         }
-
-        // Trim trailing empty lines from message
         while message_lines.last().map(|l| l.is_empty()).unwrap_or(false) {
             message_lines.pop();
         }
+
+        let files: Vec<String> = files_section
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(str::to_string)
+            .collect();
 
         let full_message = message_lines.join("\n");
         let hash8 = &hash[..8.min(hash.len())];
