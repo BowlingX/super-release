@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.6.1] - 2026-05-07
+
+### 🐛 Bug Fixes
+
+- Fixed commit message parsing
+- Fix cascade skipping logic in maintenance branches (#9)
 ## [1.6.0] - 2026-04-07
 
 ### 🚀 Features
