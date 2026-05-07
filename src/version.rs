@@ -264,7 +264,7 @@ pub fn determine_releases(
     // 7. Propagate releases to dependents: if package X is released and package Y
     //    depends on X (via local_dependencies), Y should also get a patch release.
     //    This is recursive — if Y propagates, Z depending on Y also propagates.
-    propagate_to_dependents(&mut releases, packages, &tag_infos);
+    propagate_to_dependents(&mut releases, packages, &tag_infos, branch_ctx);
 
     Ok(releases)
 }
@@ -276,6 +276,7 @@ fn propagate_to_dependents(
     releases: &mut Vec<PackageRelease>,
     packages: &[Package],
     tag_infos: &[PkgTagInfo],
+    branch_ctx: &BranchContext,
 ) {
     // Build reverse dependency map: dep_name -> vec of dependent package indices
     let mut reverse_deps: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -305,9 +306,27 @@ fn propagate_to_dependents(
                 continue;
             }
 
+            let tag_info = &tag_infos[dep_idx];
+
+            // Mirror the per-package filter applied to direct releases (see
+            // `determine_releases` step 6): on maintenance branches, dependents
+            // whose current version is outside the branch's range are not in
+            // scope and must not receive cascaded bumps. Without this, e.g.
+            // a `10.242.x` branch could try to bump a `5.55.x`-line dependent.
+            if branch_ctx.maintenance
+                && let Some(ref range) = branch_ctx.maintenance_range
+                && !version_in_maintenance_range(&tag_info.current_version, range)
+            {
+                released.insert(dep_pkg.name.clone());
+                eprintln!(
+                    "  [version] Skipping cascade to '{}' v{}: outside maintenance range for branch '{}'",
+                    dep_pkg.name, tag_info.current_version, branch_ctx.branch_name
+                );
+                continue;
+            }
+
             released.insert(dep_pkg.name.clone());
 
-            let tag_info = &tag_infos[dep_idx];
             let mut next_version = tag_info.current_version.clone();
             next_version.patch += 1;
             next_version.pre = Prerelease::EMPTY;

@@ -473,3 +473,247 @@ steps: []
         stdout
     );
 }
+
+#[test]
+fn test_monorepo_maintenance_cascade_skips_out_of_range_dependent() {
+    // Regression: a maintenance branch like `10.242.x` should not cascade a
+    // bump into a dependent on a different version line (e.g. `5.55.x`),
+    // because that dependent's next version may already exist as a tag from
+    // another branch, and it isn't in scope for this maintenance release.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "monorepo", "version": "0.0.0", "private": true}"#,
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("packages/lib/src")).unwrap();
+    fs::write(
+        root.join("packages/lib/package.json"),
+        r#"{"name": "@acme/lib", "version": "10.242.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/lib/src/index.ts"), "// lib").unwrap();
+
+    fs::create_dir_all(root.join("packages/docs/src")).unwrap();
+    fs::write(
+        root.join("packages/docs/package.json"),
+        r#"{"name": "@acme/docs", "version": "5.55.4", "dependencies": {"@acme/lib": "^10.0.0"}}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/docs/src/index.ts"), "// docs").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches:
+  - main
+  - name: "10.242.x"
+    maintenance: true
+exclude:
+  - monorepo
+steps: []
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    tag(root, "@acme/lib/v10.242.0");
+    tag(root, "@acme/docs/v5.55.4");
+    // Model the bug condition: docs 5.55.5 already exists as a tag (released
+    // from another branch). If propagation cascades to docs on 10.242.x, the
+    // computed 5.55.5 collides with this tag.
+    tag(root, "@acme/docs/v5.55.5");
+
+    git(root, &["checkout", "-b", "10.242.x"]);
+
+    // Fix only in lib — docs is untouched.
+    fs::write(root.join("packages/lib/src/index.ts"), "// lib fix").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: patch in lib only"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Should succeed (no collision):\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("@acme/lib") && stdout.contains("10.242.1"),
+        "Should release @acme/lib 10.242.1:\n{}",
+        stdout
+    );
+    // docs would only be cascaded as `5.55.4 -> 5.55.5`; the discovery list
+    // also names `@acme/docs`, so we check the cascade-specific markers.
+    assert!(
+        !stdout.contains("5.55.5") && !stdout.contains("dependency updated"),
+        "Should NOT cascade to @acme/docs (different version line, out of 10.242.x range):\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        !stdout.contains("packages/docs/package.json"),
+        "Should NOT bump packages/docs/package.json on a 10.242.x maintenance release:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stderr.contains("Skipping cascade") && stderr.contains("@acme/docs"),
+        "Should log that the cascade to @acme/docs was skipped:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+}
+
+#[test]
+fn test_monorepo_maintenance_cascade_with_branch_packages_whitelist() {
+    // Combined scenario: maintenance branch `10.242.x` with an explicit
+    // `packages: ["@acme/lib"]` whitelist. Three packages all depending on
+    // lib exercise both filters:
+    //   - @acme/lib    (10.242.0, in range, in whitelist)   → released as 10.242.1
+    //   - @acme/docs   (5.55.4,   out of range, not in WL)  → skipped by range filter
+    //                                                          (cascade never enqueued)
+    //   - @acme/utils  (10.242.0, in range, NOT in WL)      → cascaded by propagation
+    //                                                          (range filter passes),
+    //                                                          then dropped by the
+    //                                                          branch-level whitelist
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "test@test.com"]);
+    git(root, &["config", "user.name", "Test"]);
+
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "monorepo", "version": "0.0.0", "private": true}"#,
+    )
+    .unwrap();
+
+    fs::create_dir_all(root.join("packages/lib/src")).unwrap();
+    fs::write(
+        root.join("packages/lib/package.json"),
+        r#"{"name": "@acme/lib", "version": "10.242.0"}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/lib/src/index.ts"), "// lib").unwrap();
+
+    fs::create_dir_all(root.join("packages/docs/src")).unwrap();
+    fs::write(
+        root.join("packages/docs/package.json"),
+        r#"{"name": "@acme/docs", "version": "5.55.4", "dependencies": {"@acme/lib": "^10.0.0"}}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/docs/src/index.ts"), "// docs").unwrap();
+
+    fs::create_dir_all(root.join("packages/utils/src")).unwrap();
+    fs::write(
+        root.join("packages/utils/package.json"),
+        r#"{"name": "@acme/utils", "version": "10.242.0", "dependencies": {"@acme/lib": "^10.0.0"}}"#,
+    )
+    .unwrap();
+    fs::write(root.join("packages/utils/src/index.ts"), "// utils").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches:
+  - main
+  - name: "10.242.x"
+    maintenance: true
+    packages:
+      - "@acme/lib"
+exclude:
+  - monorepo
+steps: []
+"#,
+    )
+    .unwrap();
+
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    tag(root, "@acme/lib/v10.242.0");
+    tag(root, "@acme/docs/v5.55.4");
+    tag(root, "@acme/docs/v5.55.5"); // models pre-existing tag from another branch
+    tag(root, "@acme/utils/v10.242.0");
+
+    git(root, &["checkout", "-b", "10.242.x"]);
+
+    fs::write(root.join("packages/lib/src/index.ts"), "// lib fix").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: patch in lib only"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-v") // need verbose for the branch-whitelist skip log
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Should succeed:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    // Only lib is released.
+    assert!(
+        stdout.contains("Release plan (1 package(s) to release)"),
+        "Should release exactly 1 package:\nstdout: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("@acme/lib") && stdout.contains("10.242.1"),
+        "Should release @acme/lib 10.242.1:\nstdout: {}",
+        stdout
+    );
+
+    // docs cascade is blocked by the range filter (logs to stderr).
+    assert!(
+        stderr.contains("Skipping cascade") && stderr.contains("@acme/docs"),
+        "Should log range-filter skip for @acme/docs:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    // utils cascade survives the range filter but is dropped by the branch
+    // whitelist — verbose mode logs that drop with "Skipped N package(s)".
+    assert!(
+        stdout.contains("Skipped") && stdout.contains("not included in branch '10.242.x'"),
+        "Should log branch-whitelist skip for @acme/utils:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+
+    // Belt-and-suspenders: neither cascade target ends up in the bumping section.
+    assert!(
+        !stdout.contains("packages/docs/package.json"),
+        "Should NOT bump packages/docs:\nstdout: {}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("packages/utils/package.json"),
+        "Should NOT bump packages/utils:\nstdout: {}",
+        stdout
+    );
+}
