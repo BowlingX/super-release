@@ -3,7 +3,7 @@
   "description": "Dependencies for e2e comparison tests",
   "devDependencies": {
     "@semantic-release/commit-analyzer": "^13.0.1",
-    "@semantic-release/release-notes-generator": "^14.0.3",
+    "@semantic-release/release-notes-generator": "^14.1.1",
     "semantic-release": "^25.0.5"
   }
 }
