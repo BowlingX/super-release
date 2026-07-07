@@ -605,23 +605,62 @@ fn finalize_git(
     }
 
     // Push
-    if cfg.git.push && (!created_tags.is_empty() || has_staged) {
-        printfl!("  [git] Pushing to {} ...", cfg.git.remote);
-        let mut push_cmd = Command::new("git");
-        push_cmd
-            .arg("push")
-            .arg(&cfg.git.remote)
-            .arg("HEAD")
-            .current_dir(repo_root);
-        for tag in &created_tags {
-            push_cmd.arg(tag);
+    if cfg.git.push {
+        // A concurrent release may already have pushed some of these tags
+        // (e.g. the local checkout didn't fetch them); the remote rejects
+        // re-pushing an existing tag, which would fail the entire push.
+        let on_remote = match git::remote_existing_tags(repo_root, &cfg.git.remote, &created_tags)
+        {
+            Ok(tags) => tags,
+            Err(e) => {
+                printfl!(
+                    "  [git] Warning: could not check remote tags ({}), pushing all",
+                    e
+                );
+                Default::default()
+            }
+        };
+        created_tags.retain(|tag| {
+            let Some(remote_oid) = on_remote.get(tag) else {
+                return true;
+            };
+            let local_oid = git::tag_to_oid(repo, tag).ok().flatten();
+            if local_oid.is_some_and(|oid| oid.to_string() == *remote_oid) {
+                printfl!("  [git] Tag already on remote: {}, skipping push", tag);
+            } else {
+                printfl!(
+                    "  [git] Tag already on remote (points at a different commit): {}, skipping push",
+                    tag
+                );
+            }
+            false
+        });
+
+        if has_staged || !created_tags.is_empty() {
+            printfl!("  [git] Pushing to {} ...", cfg.git.remote);
+            let mut push_cmd = Command::new("git");
+            push_cmd.arg("push");
+            // All refs or nothing: a lost push race must not leave tags on
+            // the remote whose release commit never landed on the branch.
+            if cfg.git.atomic {
+                push_cmd.arg("--atomic");
+            }
+            push_cmd
+                .arg(&cfg.git.remote)
+                .arg("HEAD")
+                .current_dir(repo_root);
+            for tag in &created_tags {
+                push_cmd.arg(tag);
+            }
+            let output = push_cmd.output()?;
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                anyhow::bail!("git push failed: {}", stderr);
+            }
+            printfl!("  [git] Pushed");
+        } else {
+            printfl!("  [git] Nothing to push");
         }
-        let output = push_cmd.output()?;
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("git push failed: {}", stderr);
-        }
-        printfl!("  [git] Pushed");
     }
 
     Ok(())

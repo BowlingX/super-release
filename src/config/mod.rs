@@ -64,6 +64,12 @@ pub struct GitConfig {
     /// Git remote name (default: "origin").
     #[serde(default = "default_remote")]
     pub remote: String,
+
+    /// Push all refs atomically (`git push --atomic`) so a lost push race
+    /// can't leave partial state on the remote, e.g. tags without their
+    /// commit. Disable for servers without atomic push support.
+    #[serde(default = "default_atomic")]
+    pub atomic: bool,
 }
 
 fn default_commit_message() -> String {
@@ -74,12 +80,17 @@ fn default_remote() -> String {
     "origin".into()
 }
 
+fn default_atomic() -> bool {
+    true
+}
+
 impl Default for GitConfig {
     fn default() -> Self {
         Self {
             commit_message: default_commit_message(),
             push: false,
             remote: default_remote(),
+            atomic: default_atomic(),
         }
     }
 }

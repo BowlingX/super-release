@@ -1,6 +1,6 @@
 use assert_cmd::Command;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process;
 use tempfile::TempDir;
 
@@ -53,6 +53,35 @@ steps:
     fs::write(root.join("index.js"), "// v1.1").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "feat: add new feature"]);
+}
+
+/// `setup_single_package` plus a push-enabled config and a bare `origin`
+/// seeded with main + v1.0.0. Returns (work root, bare remote dir).
+fn setup_single_package_with_remote(dir: &Path) -> (PathBuf, PathBuf) {
+    let root = dir.join("work");
+    fs::create_dir_all(&root).unwrap();
+    setup_single_package(&root);
+
+    fs::write(
+        root.join(".release.yaml"),
+        r#"
+branches:
+  - main
+steps:
+  - name: changelog
+git:
+  push: true
+"#,
+    )
+    .unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "chore: enable push"]);
+
+    let remote_dir = dir.join("remote.git");
+    git(dir, &["init", "--bare", remote_dir.to_str().unwrap()]);
+    git(&root, &["remote", "add", "origin", remote_dir.to_str().unwrap()]);
+    git(&root, &["push", "origin", "main", "v1.0.0"]);
+    (root, remote_dir)
 }
 
 fn setup_monorepo(root: &Path) {
@@ -410,6 +439,111 @@ fn test_rerun_when_manifest_already_bumped() {
     assert!(
         tag_list.contains("v1.1.0"),
         "Missing tag v1.1.0:\n{}",
+        tag_list
+    );
+}
+
+// ──────────────────────────────────────────────────────────────
+// Push idempotency — tag already exists on the remote
+// ──────────────────────────────────────────────────────────────
+
+#[test]
+fn test_push_skips_tag_already_on_remote() {
+    let dir = TempDir::new().unwrap();
+    let (root, remote_dir) = setup_single_package_with_remote(dir.path());
+    let root = &root;
+
+    // Simulate a concurrent release: v1.1.0 exists on the remote but not
+    // locally (e.g. a CI checkout that didn't fetch tags)
+    git(root, &["tag", "-a", "v1.1.0", "-m", "concurrent release"]);
+    git(root, &["push", "origin", "v1.1.0"]);
+    git(root, &["tag", "-d", "v1.1.0"]);
+
+    let output = super_release_bin()
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Release should succeed when tag exists on remote:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains(
+            "Tag already on remote (points at a different commit): v1.1.0, skipping push"
+        ),
+        "Should skip pushing the existing remote tag and flag the divergence:\n{}",
+        stdout
+    );
+    assert!(stdout.contains("Pushed"), "Should still push HEAD:\n{}", stdout);
+
+    // The release commit made it to the remote
+    let local_head = process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let remote_head = process::Command::new("git")
+        .args(["rev-parse", "refs/heads/main"])
+        .current_dir(&remote_dir)
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&local_head.stdout),
+        String::from_utf8_lossy(&remote_head.stdout),
+        "Remote main should match local HEAD"
+    );
+}
+
+#[test]
+fn test_atomic_push_leaves_no_tags_when_branch_push_rejected() {
+    let dir = TempDir::new().unwrap();
+    let (root, remote_dir) = setup_single_package_with_remote(dir.path());
+    let root = &root;
+
+    // Simulate a concurrent release winning the race: remote main moves
+    // ahead, so this run's HEAD push will be rejected (non-fast-forward)
+    let other = dir.path().join("other");
+    git(
+        dir.path(),
+        &["clone", remote_dir.to_str().unwrap(), other.to_str().unwrap()],
+    );
+    git(&other, &["config", "user.email", "other@test.com"]);
+    git(&other, &["config", "user.name", "Other"]);
+    fs::write(other.join("index.js"), "// concurrent").unwrap();
+    git(&other, &["add", "."]);
+    git(&other, &["commit", "-m", "feat: concurrent change"]);
+    git(&other, &["push", "origin", "main"]);
+
+    let output = super_release_bin()
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    // The push must fail (branch rejected)...
+    assert!(
+        !output.status.success(),
+        "Push should fail when remote branch moved:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    // ...and atomically: the rejected run must not leave its tag behind,
+    // or every later run would see an orphaned v1.1.0 pointing off-branch
+    let tags = process::Command::new("git")
+        .args(["tag", "-l", "v1.1.0"])
+        .current_dir(&remote_dir)
+        .output()
+        .unwrap();
+    let tag_list = String::from_utf8_lossy(&tags.stdout);
+    assert!(
+        tag_list.trim().is_empty(),
+        "Remote should have no v1.1.0 tag after rejected atomic push, got:\n{}",
         tag_list
     );
 }
