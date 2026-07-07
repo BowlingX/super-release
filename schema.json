@@ -176,6 +176,11 @@
           "type": "string",
           "default": "origin",
           "description": "Git remote name"
+        },
+        "atomic": {
+          "type": "boolean",
+          "default": true,
+          "description": "Push all refs atomically (git push --atomic) so a lost push race can't leave partial state on the remote. Disable for servers without atomic push support."
         }
       }
     },

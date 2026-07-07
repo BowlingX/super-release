@@ -396,3 +396,52 @@ pub fn tag_to_oid(repo: &Repository, tag_name: &str) -> Result<Option<git2::Oid>
         Err(_) => Ok(None),
     }
 }
+
+/// Which of `tags` already exist on the remote, mapped to the commit OID
+/// they point (or peel) to.
+pub fn remote_existing_tags(
+    repo_root: &Path,
+    remote: &str,
+    tags: &[String],
+) -> Result<HashMap<String, String>> {
+    if tags.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let mut cmd = std::process::Command::new("git");
+    cmd.arg("ls-remote")
+        .arg("--tags")
+        .arg(remote)
+        .current_dir(repo_root);
+    for tag in tags {
+        cmd.arg(format!("refs/tags/{}", tag));
+    }
+
+    let output = cmd.output().context("Failed to run git ls-remote")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git ls-remote failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut existing = HashMap::new();
+    for line in stdout.lines() {
+        let Some((oid, refname)) = line.split_once('\t') else {
+            continue;
+        };
+        // Annotated tags list the tag object plus a peeled "^{}" line with
+        // the commit; prefer the peeled OID.
+        if let Some(name) = refname.strip_suffix("^{}") {
+            if let Some(name) = name.strip_prefix("refs/tags/") {
+                existing.insert(name.to_string(), oid.to_string());
+            }
+        } else if let Some(name) = refname.strip_prefix("refs/tags/") {
+            existing
+                .entry(name.to_string())
+                .or_insert_with(|| oid.to_string());
+        }
+    }
+    Ok(existing)
+}
