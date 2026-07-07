@@ -324,6 +324,97 @@ fn test_idempotent_rerun_monorepo() {
 }
 
 // ──────────────────────────────────────────────────────────────
+// Version bump idempotency — manifest already at target version
+// (e.g. a concurrent release bumped package.json but its tag never landed)
+// ──────────────────────────────────────────────────────────────
+
+#[test]
+fn test_rerun_when_manifest_already_bumped() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_single_package(root);
+
+    // Simulate a concurrent release: package.json and changelog already at
+    // 1.1.0, but no v1.1.0 tag.
+    fs::write(
+        root.join("package.json"),
+        r#"{"name": "my-app", "version": "1.1.0"}"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("CHANGELOG.md"),
+        "# Changelog\n\n## [1.1.0] - 2026-07-07\n\n### 🚀 Features\n\n- Add new feature\n",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-m", "chore(release): my-app@1.1.0 [skip ci]"],
+    );
+
+    // Dry run must detect the already-bumped state
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "Dry run failed:\n{}", stdout);
+    assert!(
+        stdout.contains("already at 1.1.0, would skip"),
+        "Dry run should detect manifest already at target version:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("already contains 1.1.0, would skip"),
+        "Dry run should detect changelog already written:\n{}",
+        stdout
+    );
+
+    // Real run completes the interrupted release
+    let output = super_release_bin()
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Rerun should succeed when manifest is already bumped:\nstdout: {}\nstderr: {}",
+        stdout,
+        stderr
+    );
+    assert!(
+        stdout.contains("already at 1.1.0"),
+        "Should report manifest already at target version:\n{}",
+        stdout
+    );
+
+    let changelog = fs::read_to_string(root.join("CHANGELOG.md")).unwrap();
+    assert_eq!(
+        changelog.matches("## [1.1.0]").count(),
+        1,
+        "Changelog section duplicated:\n{}",
+        changelog
+    );
+
+    let tags = process::Command::new("git")
+        .args(["tag", "-l", "v1.1.0"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    let tag_list = String::from_utf8_lossy(&tags.stdout);
+    assert!(
+        tag_list.contains("v1.1.0"),
+        "Missing tag v1.1.0:\n{}",
+        tag_list
+    );
+}
+
+// ──────────────────────────────────────────────────────────────
 // Git tag idempotency — tags already exist
 // ──────────────────────────────────────────────────────────────
 

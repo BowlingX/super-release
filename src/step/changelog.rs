@@ -50,6 +50,15 @@ fn default_preview_lines() -> usize {
 
 pub struct ChangelogStep;
 
+struct PreparedChangelog {
+    pkg_name: String,
+    path: PathBuf,
+    existing: String,
+    /// `None` when `existing` already contains this release's section.
+    notes: Option<String>,
+    next_version: String,
+}
+
 impl Step for ChangelogStep {
     fn name(&self) -> &str {
         "changelog"
@@ -65,7 +74,7 @@ impl Step for ChangelogStep {
         let opts: ChangelogOptions = parse_options(config)?;
 
         // Generate changelogs per package in parallel
-        let results: Vec<(String, String, String)> = releases
+        let results: Vec<PreparedChangelog> = releases
             .par_iter()
             .map(|release| {
                 let pkg_dir = packages
@@ -74,19 +83,43 @@ impl Step for ChangelogStep {
                     .map(|p| ctx.repo_root.join(&p.path))
                     .unwrap_or_else(|| ctx.repo_root.to_path_buf());
 
-                let changelog_path = pkg_dir.join(&opts.filename);
-                let notes = generate_release_notes(release)?;
-                Ok((
-                    release.package_name.clone(),
-                    changelog_path.to_string_lossy().to_string(),
+                let path = pkg_dir.join(&opts.filename);
+                let existing = read_changelog(&path)?;
+                let next_version = release.next_version.to_string();
+
+                // Don't duplicate sections written by a concurrent release.
+                let notes = if changelog_contains_version(&existing, &next_version) {
+                    None
+                } else {
+                    Some(generate_release_notes(release)?)
+                };
+
+                Ok(PreparedChangelog {
+                    pkg_name: release.package_name.clone(),
+                    path,
+                    existing,
                     notes,
-                ))
+                    next_version,
+                })
             })
             .collect::<Result<Vec<_>>>()?;
 
         // Write/print results sequentially (filesystem writes + stdout)
-        for (pkg_name, changelog_path, notes) in &results {
-            let path = Path::new(changelog_path);
+        for prepared in &results {
+            let Some(notes) = &prepared.notes else {
+                println!(
+                    "  [changelog] {} already contains {}, {} ({})",
+                    prepared.path.display(),
+                    prepared.next_version,
+                    if ctx.dry_run {
+                        "would skip"
+                    } else {
+                        "skipping"
+                    },
+                    prepared.pkg_name
+                );
+                continue;
+            };
 
             if ctx.dry_run {
                 let total_lines = notes.lines().count();
@@ -99,8 +132,8 @@ impl Step for ChangelogStep {
 
                 println!(
                     "  [changelog] Would update {} ({})",
-                    path.display(),
-                    pkg_name
+                    prepared.path.display(),
+                    prepared.pkg_name
                 );
                 println!("{}", preview);
                 if total_lines > opts.preview_lines {
@@ -113,16 +146,16 @@ impl Step for ChangelogStep {
                 continue;
             }
 
-            update_changelog(path, notes)?;
-            println!("  [changelog] Updated {}", path.display());
+            update_changelog(&prepared.path, notes, &prepared.existing)?;
+            println!("  [changelog] Updated {}", prepared.path.display());
         }
 
         let modified: Vec<PathBuf> = results
             .iter()
-            .map(|(_, p, _)| {
-                PathBuf::from(p)
+            .map(|p| {
+                p.path
                     .strip_prefix(ctx.repo_root)
-                    .unwrap_or(&PathBuf::from(p))
+                    .unwrap_or(&p.path)
                     .to_path_buf()
             })
             .collect();
@@ -163,16 +196,25 @@ pub fn generate_release_notes(release: &PackageRelease) -> Result<String> {
     Ok(String::from_utf8(output)?)
 }
 
-fn update_changelog(path: &Path, new_content: &str) -> Result<()> {
-    let existing = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(e.into()),
-    };
+/// Reads an existing changelog, treating a missing file as empty.
+fn read_changelog(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(content),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(e.into()),
+    }
+}
 
+/// Relies on the git-cliff template rendering headings as `## [<version>]`,
+/// pinned by `test_release_notes_heading_format`.
+fn changelog_contains_version(existing: &str, version: &str) -> bool {
+    existing.contains(&format!("## [{}]", version))
+}
+
+fn update_changelog(path: &Path, new_content: &str, existing: &str) -> Result<()> {
     let header = "# Changelog\n\n";
     let body = if existing.starts_with("# Changelog") {
-        let rest = existing.strip_prefix("# Changelog").unwrap_or(&existing);
+        let rest = existing.strip_prefix("# Changelog").unwrap_or(existing);
         let rest = rest.trim_start_matches('\n');
         format!("{}{}{}", header, new_content, rest)
     } else if existing.is_empty() {
@@ -183,4 +225,33 @@ fn update_changelog(path: &Path, new_content: &str) -> Result<()> {
 
     fs::write(path, body)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commit::BumpLevel;
+    use crate::version::PackageRelease;
+
+    /// Pins the heading shape `changelog_contains_version` depends on.
+    #[test]
+    fn test_release_notes_heading_format() {
+        let release = PackageRelease {
+            package_name: "my-pkg".into(),
+            current_version: semver::Version::new(1, 0, 0),
+            next_version: semver::Version::new(1, 1, 0),
+            bump: BumpLevel::Minor,
+            commits: vec![],
+            is_root: false,
+            propagated_from: None,
+        };
+
+        let notes = generate_release_notes(&release).unwrap();
+        assert!(
+            changelog_contains_version(&notes, "1.1.0"),
+            "generated notes no longer match the expected heading format:\n{}",
+            notes
+        );
+        assert!(!changelog_contains_version(&notes, "1.0.0"));
+    }
 }

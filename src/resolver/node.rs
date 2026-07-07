@@ -68,7 +68,16 @@ impl PackageResolver for NodeResolver {
                 .context(format!("package '{}' not found", release.package_name))?;
             let manifest_path = repo_root.join(&pkg.manifest_path);
 
-            if dry_run {
+            // pkg.version is the on-disk version; a concurrent release may
+            // already have bumped it.
+            if pkg.version == release.next_version {
+                println!(
+                    "  [version] {} already at {}, {}",
+                    pkg.manifest_path.display(),
+                    release.next_version,
+                    if dry_run { "would skip" } else { "skipping" }
+                );
+            } else if dry_run {
                 println!(
                     "  [version] Would update {}: {} -> {}",
                     pkg.manifest_path.display(),
@@ -99,14 +108,14 @@ fn update_package_version(path: &Path, new_version: &semver::Version) -> Result<
             .expect("version regex is invalid — this is a bug")
     });
 
-    // Replace only the "version" field value, preserving all other formatting.
     let re = &*VERSION_RE;
-    let replacement = format!(r#"${{1}}"{}""#, new_version);
-    let updated = re.replace(&content, replacement.as_str());
-
-    if updated == content {
+    if !re.is_match(&content) {
         anyhow::bail!("Could not find \"version\" field in {}", path.display());
     }
+
+    // Replace only the "version" field value, preserving all other formatting.
+    let replacement = format!(r#"${{1}}"{}""#, new_version);
+    let updated = re.replace(&content, replacement.as_str());
 
     std::fs::write(path, updated.as_bytes())?;
     Ok(())
@@ -245,6 +254,29 @@ mod tests {
             content,
             r#"{"name":"@acme/core","version":"1.1.0","dependencies":{"@acme/utils":"^1.0.0"}}"#
         );
+    }
+
+    #[test]
+    fn test_update_already_at_target_version_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        let original = r#"{"name":"@acme/core","version":"1.1.0"}"#;
+        std::fs::write(&path, original).unwrap();
+
+        update_package_version(&path, &semver::Version::new(1, 1, 0)).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, original);
+    }
+
+    #[test]
+    fn test_update_missing_version_field_errors() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("package.json");
+        std::fs::write(&path, r#"{"name":"@acme/core"}"#).unwrap();
+
+        let err = update_package_version(&path, &semver::Version::new(1, 1, 0)).unwrap_err();
+        assert!(err.to_string().contains("Could not find \"version\" field"));
     }
 
     #[test]
