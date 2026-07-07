@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.7.0] - 2026-07-07
+
+### 🚀 Features
+
+- Added support for atomic push, more safeguards (#27)
 ## [1.6.2] - 2026-07-07
 
 ### 🐛 Bug Fixes
