@@ -78,7 +78,10 @@ git:
     git(&root, &["commit", "-m", "chore: enable push"]);
 
     let remote_dir = dir.join("remote.git");
-    git(dir, &["init", "--bare", remote_dir.to_str().unwrap()]);
+    git(
+        dir,
+        &["init", "--bare", "-b", "main", remote_dir.to_str().unwrap()],
+    );
     git(
         &root,
         &["remote", "add", "origin", remote_dir.to_str().unwrap()],
