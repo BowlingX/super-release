@@ -609,8 +609,7 @@ fn finalize_git(
         // A concurrent release may already have pushed some of these tags
         // (e.g. the local checkout didn't fetch them); the remote rejects
         // re-pushing an existing tag, which would fail the entire push.
-        let on_remote = match git::remote_existing_tags(repo_root, &cfg.git.remote, &created_tags)
-        {
+        let on_remote = match git::remote_existing_tags(repo_root, &cfg.git.remote, &created_tags) {
             Ok(tags) => tags,
             Err(e) => {
                 printfl!(

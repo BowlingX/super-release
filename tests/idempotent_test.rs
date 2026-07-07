@@ -79,7 +79,10 @@ git:
 
     let remote_dir = dir.join("remote.git");
     git(dir, &["init", "--bare", remote_dir.to_str().unwrap()]);
-    git(&root, &["remote", "add", "origin", remote_dir.to_str().unwrap()]);
+    git(
+        &root,
+        &["remote", "add", "origin", remote_dir.to_str().unwrap()],
+    );
     git(&root, &["push", "origin", "main", "v1.0.0"]);
     (root, remote_dir)
 }
@@ -480,7 +483,11 @@ fn test_push_skips_tag_already_on_remote() {
         "Should skip pushing the existing remote tag and flag the divergence:\n{}",
         stdout
     );
-    assert!(stdout.contains("Pushed"), "Should still push HEAD:\n{}", stdout);
+    assert!(
+        stdout.contains("Pushed"),
+        "Should still push HEAD:\n{}",
+        stdout
+    );
 
     // The release commit made it to the remote
     let local_head = process::Command::new("git")
@@ -511,7 +518,11 @@ fn test_atomic_push_leaves_no_tags_when_branch_push_rejected() {
     let other = dir.path().join("other");
     git(
         dir.path(),
-        &["clone", remote_dir.to_str().unwrap(), other.to_str().unwrap()],
+        &[
+            "clone",
+            remote_dir.to_str().unwrap(),
+            other.to_str().unwrap(),
+        ],
     );
     git(&other, &["config", "user.email", "other@test.com"]);
     git(&other, &["config", "user.name", "Other"]);
