@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.6.2] - 2026-07-07
+
+### 🐛 Bug Fixes
+
+- Made concurrent releases more robust (#25)
 ## [1.6.1] - 2026-05-07
 
 ### 🐛 Bug Fixes
