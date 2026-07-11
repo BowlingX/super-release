@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.7.1] - 2026-07-11
+
+### 🐛 Bug Fixes
+
+- Simplify
 ## [1.7.0] - 2026-07-07
 
 ### 🚀 Features
