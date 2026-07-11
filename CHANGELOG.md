@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.11.0] - 2026-07-11
+
+### 🚀 Features
+
+- Setup github action (#31)
 ## [1.10.0] - 2026-07-11
 
 ### 🚀 Features
