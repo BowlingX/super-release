@@ -1,5 +1,6 @@
 pub mod changelog;
 pub mod exec;
+pub mod github;
 pub mod npm;
 pub mod subprocess;
 
@@ -15,6 +16,18 @@ pub struct StepContext<'a> {
     pub repo_root: &'a std::path::Path,
     pub dry_run: bool,
     pub branch: &'a crate::config::BranchContext,
+    pub cfg: &'a crate::config::Config,
+}
+
+/// Context passed to the `release` phase, which runs *after* the git commit and
+/// tags are pushed. Carries the config (for tag formatting) and the repository
+/// (for remote/owner-repo resolution) that publishing to GitHub needs.
+pub struct ReleaseContext<'a> {
+    pub repo_root: &'a std::path::Path,
+    pub dry_run: bool,
+    pub branch: &'a crate::config::BranchContext,
+    pub cfg: &'a crate::config::Config,
+    pub repo: &'a git2::Repository,
 }
 
 /// Trait that all release steps must implement.
@@ -48,6 +61,18 @@ pub trait Step: Send + Sync {
     ) -> Result<Vec<PathBuf>> {
         Ok(Vec::new())
     }
+
+    /// Runs after the git commit and tags are pushed — the place for publishing
+    /// to external services that reference the pushed tag (e.g. GitHub Releases).
+    fn release(
+        &self,
+        _ctx: &ReleaseContext,
+        _config: &StepConfig,
+        _packages: &[Package],
+        _releases: &[PackageRelease],
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Create a step instance by name.
@@ -55,6 +80,7 @@ pub fn create_step(name: &str) -> Option<Box<dyn Step>> {
     match name {
         "changelog" => Some(Box::new(changelog::ChangelogStep)),
         "exec" => Some(Box::new(exec::ExecStep)),
+        "github" => Some(Box::new(github::GithubStep)),
         "npm" => Some(Box::new(npm::NpmStep)),
         _ => None,
     }

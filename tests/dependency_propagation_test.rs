@@ -22,7 +22,7 @@ fn setup_monorepo(root: &std::path::Path, pkgs: &[(&str, &str, &str)], release_y
     .unwrap();
 
     for (name, version, deps) in pkgs {
-        let short = name.split('/').last().unwrap_or(name);
+        let short = name.split('/').next_back().unwrap_or(name);
         let pkg_dir = root.join(format!("packages/{}/src", short));
         fs::create_dir_all(&pkg_dir).unwrap();
         fs::write(pkg_dir.join("index.ts"), format!("// {}", name)).unwrap();

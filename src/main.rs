@@ -1,8 +1,10 @@
 mod commit;
 mod config;
 mod git;
+mod github;
 mod package;
 mod pm;
+mod preview;
 mod resolver;
 mod step;
 mod version;
@@ -45,6 +47,31 @@ struct Cli {
     /// Use --package to select which package (defaults to root).
     #[arg(long)]
     show_next_version: bool,
+
+    /// Render a release preview (next versions + notes) for a pull request and
+    /// exit. Posts/updates a sticky PR comment when a GitHub token and PR are
+    /// detected; otherwise prints the Markdown to stdout. Makes no changes.
+    #[arg(long)]
+    preview: bool,
+
+    /// Pull request number for --preview (defaults to the PR detected from the
+    /// GitHub Actions environment).
+    #[arg(long)]
+    pr: Option<u64>,
+
+    /// GitHub repository as `owner/name` for --preview (defaults to the git
+    /// remote or the GITHUB_REPOSITORY environment variable).
+    #[arg(long)]
+    repo: Option<String>,
+
+    /// Base branch to evaluate --preview against (defaults to the PR base
+    /// branch, GITHUB_BASE_REF, or the first configured release branch).
+    #[arg(long)]
+    base: Option<String>,
+
+    /// With --preview, never post a PR comment; always print Markdown to stdout.
+    #[arg(long)]
+    no_comment: bool,
 
     /// Filter to a specific package (used with --show-next-version)
     #[arg(long, short = 'p')]
@@ -117,7 +144,7 @@ fn main() -> Result<()> {
         None => config::Config::default(),
     };
 
-    let quiet = cli.show_next_version;
+    let quiet = cli.show_next_version || cli.preview;
     let verbose_mode = !quiet && (cli.verbose || cli.dry_run);
 
     if !quiet {
@@ -222,6 +249,12 @@ fn main() -> Result<()> {
             printfl!("{}", style("No packages found.").yellow());
         }
         return Ok(());
+    }
+
+    // Runs before the HEAD branch gate below: a PR branch is usually not itself
+    // a configured release branch, and preview must not be gated out.
+    if cli.preview {
+        return run_preview(&cli, &repo, &repo_root, &cfg, &packages);
     }
 
     let branch_ctx = match config::resolve_branch_context(&repo, &cfg)? {
@@ -372,16 +405,11 @@ fn main() -> Result<()> {
         repo_root: &repo_root,
         dry_run: cli.dry_run,
         branch: &branch_ctx,
+        cfg: &cfg,
     };
 
     for step_cfg in &cfg.steps {
-        // Skip step if it's not configured for this branch
-        if !step_cfg.branches.is_empty()
-            && !step_cfg
-                .branches
-                .iter()
-                .any(|pat| config::glob_match(pat, &branch_ctx.branch_name))
-        {
+        if !step_runs_on_branch(step_cfg, &branch_ctx.branch_name) {
             verbosefl!(
                 verbose_mode,
                 "{} Skipping step '{}' (not configured for branch '{}')",
@@ -410,42 +438,19 @@ fn main() -> Result<()> {
             style(p.name()).bold()
         );
 
-        let (filtered_packages, filtered_releases) = if step_cfg.packages.is_empty() {
-            (packages.clone(), releases.clone())
-        } else {
-            let fp: Vec<_> = packages
-                .iter()
-                .filter(|p| {
-                    step_cfg
-                        .packages
-                        .iter()
-                        .any(|pat| config::glob_match(pat, &p.name))
-                })
-                .cloned()
-                .collect();
-            let fr: Vec<_> = releases
-                .iter()
-                .filter(|r| {
-                    step_cfg
-                        .packages
-                        .iter()
-                        .any(|pat| config::glob_match(pat, &r.package_name))
-                })
-                .cloned()
-                .collect();
-            verbosefl!(verbose_mode, {
-                let skipped = releases.len() - fr.len();
-                if skipped > 0 {
-                    printfl!(
-                        "  {} Filtered to {} of {} release(s) by step packages filter",
-                        style(">>").dim(),
-                        fr.len(),
-                        releases.len()
-                    );
-                }
-            });
-            (fp, fr)
-        };
+        let (filtered_packages, filtered_releases) =
+            filter_for_step(step_cfg, &packages, &releases);
+        verbosefl!(verbose_mode, {
+            let skipped = releases.len() - filtered_releases.len();
+            if skipped > 0 {
+                printfl!(
+                    "  {} Filtered to {} of {} release(s) by step packages filter",
+                    style(">>").dim(),
+                    filtered_releases.len(),
+                    releases.len()
+                );
+            }
+        });
 
         p.verify(&step_ctx, step_cfg)?;
         modified_files.extend(p.prepare(
@@ -475,6 +480,18 @@ fn main() -> Result<()> {
         &cfg,
         &releases,
         &modified_files,
+        cli.dry_run,
+    )?;
+
+    // Release phase: publish to external services (e.g. GitHub Releases) now
+    // that the commit and tags exist on the remote.
+    run_release_phase(
+        &repo_root,
+        &repo,
+        &cfg,
+        &branch_ctx,
+        &packages,
+        &releases,
         cli.dry_run,
     )?;
 
@@ -700,5 +717,174 @@ fn show_next_version(
         .unwrap_or_else(|| target.version.to_string());
 
     println!("{}", version);
+    Ok(())
+}
+
+/// Render a release preview for a pull request and either post it as a sticky
+/// PR comment or print the Markdown to stdout. Makes no changes to the repo.
+fn run_preview(
+    cli: &Cli,
+    repo: &git2::Repository,
+    repo_root: &std::path::Path,
+    cfg: &config::Config,
+    packages: &[package::Package],
+) -> Result<()> {
+    let pr_ctx = github::detect_pr_context();
+
+    let base_branch = cli
+        .base
+        .clone()
+        .or_else(|| pr_ctx.as_ref().and_then(|c| c.base_ref.clone()))
+        .or_else(|| {
+            std::env::var("GITHUB_BASE_REF")
+                .ok()
+                .filter(|s| !s.is_empty())
+        })
+        .or_else(|| cfg.branches.first().map(|b| b.name().to_string()))
+        .unwrap_or_else(|| "main".to_string());
+
+    // Fall back to a plain stable context when the base isn't a configured
+    // release branch, so the preview still reflects the commit bumps.
+    let branch_ctx = config::resolve_named_branch_context(&cfg.branches, &base_branch)?
+        .unwrap_or_else(|| config::BranchContext {
+            branch_name: base_branch.clone(),
+            prerelease: None,
+            maintenance: false,
+            maintenance_range: None,
+            channel: None,
+            packages: Vec::new(),
+        });
+
+    let mut releases = version::determine_releases(repo, repo_root, packages, cfg, &branch_ctx)?;
+    if !branch_ctx.packages.is_empty() {
+        releases.retain(|r| {
+            branch_ctx
+                .packages
+                .iter()
+                .any(|pat| config::glob_match(pat, &r.package_name))
+        });
+    }
+
+    let markdown = preview::render_preview_markdown(&releases, cfg);
+
+    let pr_number = cli.pr.or_else(|| pr_ctx.as_ref().map(|c| c.number));
+    let token = github::token();
+
+    // Comment only with both a PR and a token; otherwise print for piping.
+    if !cli.no_comment
+        && let (Some(pr_number), Some(token)) = (pr_number, token)
+    {
+        let gh_repo = match &cli.repo {
+            Some(slug) => {
+                let (owner, name) = slug
+                    .split_once('/')
+                    .ok_or_else(|| anyhow::anyhow!("--repo must be in 'owner/name' form"))?;
+                github::GitHubRepo {
+                    owner: owner.to_string(),
+                    repo: name.to_string(),
+                    host: "github.com".to_string(),
+                }
+            }
+            None => github::detect_repo(repo, &cfg.git.remote)?,
+        };
+        let action = github::upsert_issue_comment(
+            &token,
+            gh_repo.api_base_uri().as_deref(),
+            &gh_repo,
+            pr_number,
+            preview::PREVIEW_MARKER,
+            &markdown,
+        )?;
+        eprintln!(
+            "{} release preview comment on {}/{} #{}",
+            action.verb(),
+            gh_repo.owner,
+            gh_repo.repo,
+            pr_number
+        );
+    } else {
+        println!("{}", markdown);
+    }
+
+    Ok(())
+}
+
+/// Whether a step should run on the current branch given its `branches` filter.
+fn step_runs_on_branch(step_cfg: &config::StepConfig, branch_name: &str) -> bool {
+    step_cfg.branches.is_empty()
+        || step_cfg
+            .branches
+            .iter()
+            .any(|pat| config::glob_match(pat, branch_name))
+}
+
+/// Narrow packages and releases to those a step operates on (its `packages`
+/// glob filter). An empty filter means all.
+fn filter_for_step(
+    step_cfg: &config::StepConfig,
+    packages: &[package::Package],
+    releases: &[version::PackageRelease],
+) -> (Vec<package::Package>, Vec<version::PackageRelease>) {
+    if step_cfg.packages.is_empty() {
+        return (packages.to_vec(), releases.to_vec());
+    }
+    let matches = |name: &str| {
+        step_cfg
+            .packages
+            .iter()
+            .any(|pat| config::glob_match(pat, name))
+    };
+    let fp = packages
+        .iter()
+        .filter(|p| matches(&p.name))
+        .cloned()
+        .collect();
+    let fr = releases
+        .iter()
+        .filter(|r| matches(&r.package_name))
+        .cloned()
+        .collect();
+    (fp, fr)
+}
+
+/// Run each step's `release` phase after the git commit and tags are pushed.
+fn run_release_phase(
+    repo_root: &std::path::Path,
+    repo: &git2::Repository,
+    cfg: &config::Config,
+    branch_ctx: &config::BranchContext,
+    packages: &[package::Package],
+    releases: &[version::PackageRelease],
+    dry_run: bool,
+) -> Result<()> {
+    if cfg.steps.iter().any(|s| s.name == "github") {
+        printfl!("{} Publishing releases", style(">>").bold().blue());
+    }
+
+    let release_ctx = step::ReleaseContext {
+        repo_root,
+        dry_run,
+        branch: branch_ctx,
+        cfg,
+        repo,
+    };
+
+    for step_cfg in &cfg.steps {
+        if !step_runs_on_branch(step_cfg, &branch_ctx.branch_name) {
+            continue;
+        }
+        // Unknown step names were already warned about in the main step loop.
+        let Some(p) = step::create_step(&step_cfg.name) else {
+            continue;
+        };
+        let (filtered_packages, filtered_releases) = filter_for_step(step_cfg, packages, releases);
+        p.release(
+            &release_ctx,
+            step_cfg,
+            &filtered_packages,
+            &filtered_releases,
+        )?;
+    }
+
     Ok(())
 }
