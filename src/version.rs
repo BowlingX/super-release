@@ -48,7 +48,6 @@ pub fn determine_releases(
     config: &Config,
     branch_ctx: &BranchContext,
 ) -> Result<Vec<PackageRelease>> {
-    // 1. Build tag index once (single revwalk + single tag enumeration).
     let pkg_pairs: Vec<(String, bool)> = packages
         .iter()
         .map(|p| (p.name.clone(), p.is_root))
@@ -60,22 +59,18 @@ pub fn determine_releases(
         .map(|pkg| {
             let latest = tag_index.latest_version(&pkg.name);
 
-            // On prerelease branches, the commit-walk cutoff should be the
-            // channel's own tag (the last release on *this* branch), not the
-            // global latest.  The global latest may sit on a different branch
-            // and already include commits we still need to process here.
+            // On prerelease branches the cutoff must be this channel's own tag, not the
+            // global latest which may sit on another branch and include commits we still need.
             let channel_tag = branch_ctx
                 .prerelease
                 .as_ref()
                 .and_then(|ch| tag_index.latest_channel_version(&pkg.name, ch));
 
-            // Pick the cutoff: prefer channel tag on prerelease branches.
             let cutoff = channel_tag.as_ref().or(latest.as_ref());
 
             match cutoff {
                 Some((tag_name, _)) => {
                     let oid = git::tag_to_oid(repo, tag_name)?;
-                    // Base version is the highest of (global latest, channel tag).
                     let current_version = match (&latest, &channel_tag) {
                         (Some((_, lv)), Some((_, cv))) => lv.max(cv).clone(),
                         (Some((_, v)), None) | (None, Some((_, v))) => v.clone(),
@@ -89,9 +84,8 @@ pub fn determine_releases(
                     })
                 }
                 None => {
-                    // No tag exists — this is a first release. Use the commit that
-                    // introduced the package manifest as the cutoff so we don't
-                    // attribute the entire repo history to this new package.
+                    // First release: use the manifest's introduction commit as cutoff so we
+                    // don't attribute the entire repo history to this new package.
                     let intro_oid =
                         git::find_file_introduction_oid(repo, repo_path, &pkg.manifest_path);
                     Ok(PkgTagInfo {
@@ -105,8 +99,8 @@ pub fn determine_releases(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // 2. Find the oldest tag across all packages — we only need commits since that point.
-    //    If any package has no tag (first release), we must walk the full history.
+    // Only walk commits since the oldest tag; if any package has no tag (first
+    // release), we must walk the full history.
     let all_have_tags = tag_infos.iter().all(|t| t.cutoff_tag.is_some());
     let oldest_tag: Option<&str> = if all_have_tags {
         find_oldest_tag(repo, &tag_infos)?
@@ -114,13 +108,9 @@ pub fn determine_releases(
         None
     };
 
-    // 3. Walk commits only from HEAD to the oldest tag boundary.
     let mut all_commits = git::get_commits_since(repo, repo_path, oldest_tag)?;
 
-    // 4. Precompute file→package name mapping once.
-    //    If any file in a commit matches a global dependency pattern,
-    //    that commit affects ALL packages.
-    // 4. Build inverted index: package_name → Vec<commit_index> in a single pass.
+    // A commit touching a file that matches a global dependency pattern affects ALL packages.
     let has_ignore = !config.ignore.is_empty();
     let all_pkg_names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
     let mut pkg_commit_indices: HashMap<&str, Vec<usize>> = HashMap::new();
@@ -173,19 +163,18 @@ pub fn determine_releases(
         }
     }
 
-    // Free file lists now that the inverted index is built — they're no longer needed.
+    // Free file lists now that the inverted index is built.
     for c in &mut all_commits {
         c.files_changed = Vec::new();
     }
 
-    // 5. Build OID→index map for O(1) cutoff lookups.
+    // Build OID→index map for O(1) cutoff lookups.
     let oid_to_idx: HashMap<git2::Oid, usize> = all_commits
         .iter()
         .enumerate()
         .filter_map(|(i, c)| c.oid.map(|oid| (oid, i)))
         .collect();
 
-    // 6. Process each package in parallel using the inverted index.
     let releases: Vec<Option<PackageRelease>> = packages
         .par_iter()
         .zip(tag_infos.par_iter())
@@ -228,8 +217,7 @@ pub fn determine_releases(
                 return Ok(None);
             }
 
-            // Check if the computed version already exists as a tag
-            // (released on another branch). Prevents version collisions.
+            // Fail if this version already exists as a tag on another branch (collision).
             if next_version.pre.is_empty() && tag_index.version_exists(&pkg.name, &next_version) {
                 anyhow::bail!(
                     "Version {} for '{}' already exists as a tag. \
@@ -261,24 +249,18 @@ pub fn determine_releases(
 
     let mut releases: Vec<PackageRelease> = releases.into_iter().flatten().collect();
 
-    // 7. Propagate releases to dependents: if package X is released and package Y
-    //    depends on X (via local_dependencies), Y should also get a patch release.
-    //    This is recursive — if Y propagates, Z depending on Y also propagates.
     propagate_to_dependents(&mut releases, packages, &tag_infos, branch_ctx);
 
     Ok(releases)
 }
 
 /// Recursively propagate releases through the reverse dependency graph.
-/// If package A is being released and package B has A in its `local_dependencies`,
-/// B gets a patch release (unless it already has a release from direct commits).
 fn propagate_to_dependents(
     releases: &mut Vec<PackageRelease>,
     packages: &[Package],
     tag_infos: &[PkgTagInfo],
     branch_ctx: &BranchContext,
 ) {
-    // Build reverse dependency map: dep_name -> vec of dependent package indices
     let mut reverse_deps: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, pkg) in packages.iter().enumerate() {
         for dep_name in pkg.local_dependencies.keys() {
@@ -286,11 +268,9 @@ fn propagate_to_dependents(
         }
     }
 
-    // Track which packages already have a release (won't be overridden)
     let mut released: HashSet<String> = releases.iter().map(|r| r.package_name.clone()).collect();
 
     // BFS queue: (package_name_that_triggered, chain_so_far)
-    // e.g. ("A", "A") -> when A's dependent B is found -> ("B", "A -> B")
     let mut queue: std::collections::VecDeque<(String, String)> = releases
         .iter()
         .map(|r| (r.package_name.clone(), r.package_name.clone()))
@@ -308,11 +288,8 @@ fn propagate_to_dependents(
 
             let tag_info = &tag_infos[dep_idx];
 
-            // Mirror the per-package filter applied to direct releases (see
-            // `determine_releases` step 6): on maintenance branches, dependents
-            // whose current version is outside the branch's range are not in
-            // scope and must not receive cascaded bumps. Without this, e.g.
-            // a `10.242.x` branch could try to bump a `5.55.x`-line dependent.
+            // Like the direct-release filter in `determine_releases`, dependents
+            // outside a maintenance branch's range must not receive cascaded bumps.
             if branch_ctx.maintenance
                 && let Some(ref range) = branch_ctx.maintenance_range
                 && !version_in_maintenance_range(&tag_info.current_version, range)
@@ -350,7 +327,6 @@ fn propagate_to_dependents(
 }
 
 /// Find the oldest tag among all packages by comparing commit timestamps.
-/// Returns the tag name that should be used as the walk boundary.
 fn find_oldest_tag<'a>(repo: &Repository, tag_infos: &'a [PkgTagInfo]) -> Result<Option<&'a str>> {
     let mut oldest: Option<(&str, i64)> = None;
 
@@ -377,7 +353,6 @@ fn calculate_next_version(
     commits: &[ConventionalCommit],
     branch_ctx: &BranchContext,
 ) -> Result<Version> {
-    // Filter once: only bump-worthy commits feed into version calculation.
     // chore/docs/ci/style/test/build/refactor don't trigger releases.
     let bump_commits: Vec<ConventionalCommit> = commits
         .iter()
@@ -407,7 +382,7 @@ fn calculate_next_version(
 fn calculate_stable_version(current: &Version, commits: &[ConventionalCommit]) -> Result<Version> {
     let cliff_release = git_cliff_core::release::Release {
         version: None,
-        commits: crate::step::changelog::to_cliff_commits(commits),
+        commits: crate::notes::to_cliff_commits(commits),
         previous: Some(Box::new(git_cliff_core::release::Release {
             version: Some(current.to_string()),
             ..Default::default()
@@ -639,7 +614,6 @@ mod tests {
 
     #[test]
     fn test_maintenance_major_minor_caps_breaking_to_patch() {
-        // Branch 1.5.x — both major and minor locked
         let range = Some(MaintenanceRange::MajorMinor(1, 5));
         let current = Version::parse("1.5.0").unwrap();
         let commits = vec![make_commit("feat!: breaking change")];
@@ -649,7 +623,6 @@ mod tests {
 
     #[test]
     fn test_maintenance_major_minor_caps_feat_to_patch() {
-        // Branch 1.5.x — feat would normally bump minor, capped to patch
         let range = Some(MaintenanceRange::MajorMinor(1, 5));
         let current = Version::parse("1.5.0").unwrap();
         let commits = vec![make_commit("feat: add feature")];
@@ -659,7 +632,6 @@ mod tests {
 
     #[test]
     fn test_maintenance_major_allows_minor() {
-        // Branch 1.x — only major locked, minor bumps allowed
         let range = Some(MaintenanceRange::Major(1));
         let current = Version::parse("1.5.0").unwrap();
         let commits = vec![make_commit("feat: add feature")];
@@ -669,7 +641,6 @@ mod tests {
 
     #[test]
     fn test_maintenance_major_caps_breaking() {
-        // Branch 1.x — breaking change capped to minor
         let range = Some(MaintenanceRange::Major(1));
         let current = Version::parse("1.5.0").unwrap();
         let commits = vec![make_commit("feat!: breaking change")];
@@ -685,8 +656,6 @@ mod tests {
         let result = calculate_maintenance_version(&current, &commits, range.as_ref()).unwrap();
         assert_eq!(result, Version::parse("1.5.3").unwrap());
     }
-
-    // ── version_in_maintenance_range ──
 
     #[test]
     fn test_version_in_maintenance_range() {
@@ -708,8 +677,6 @@ mod tests {
             &MaintenanceRange::MajorMinor(1, 4)
         ));
     }
-
-    // ── no-bump commit types should not trigger releases ──
 
     fn stable_ctx() -> BranchContext {
         BranchContext {
@@ -830,8 +797,6 @@ mod tests {
             make_commit("feat: new feature"),
             make_commit("chore: update deps"),
         ];
-        // Only fix + feat passed (chore filtered out before calling this).
-        // feat (minor) wins over fix (patch).
         let bump_commits: Vec<_> = commits
             .into_iter()
             .filter(|c| c.bump > BumpLevel::None)
@@ -850,8 +815,6 @@ mod tests {
         let result = calculate_stable_version(&v, &commits).unwrap();
         assert_eq!(result, Version::parse("2.0.0").unwrap());
     }
-
-    // ── prerelease version calculation per commit type ──
 
     #[test]
     fn test_prerelease_feat_from_stable() {
@@ -876,8 +839,6 @@ mod tests {
             calculate_prerelease_version(&v, &[make_commit("feat!: break")], "beta").unwrap();
         assert_eq!(result, Version::parse("2.0.0-beta.1").unwrap());
     }
-
-    // ── maintenance version calculation per commit type ──
 
     #[test]
     fn test_maintenance_fix_bumps_patch() {

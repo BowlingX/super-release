@@ -308,7 +308,7 @@
         },
         "success_comment": {
           "type": "string",
-          "description": "Success-comment template. Placeholders: {releases} (the tags), {tag}."
+          "description": "Success-comment template. Placeholders: {releases} (markdown links to the released packages, named via release_name_template), {tag} (the first release's raw git tag)."
         },
         "released_labels": {
           "type": "array",

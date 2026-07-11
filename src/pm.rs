@@ -24,12 +24,7 @@ impl fmt::Display for PackageManager {
 }
 
 impl PackageManager {
-    /// Auto-detect the package manager for a repository.
-    ///
-    /// Detection order:
-    /// 1. `packageManager` field in root `package.json` (corepack convention)
-    /// 2. Lock file presence: `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm
-    /// 3. Falls back to npm
+    /// Auto-detect the package manager, preferring the `packageManager` field over lock files.
     pub fn detect(repo_root: &Path) -> Result<Self> {
         if let Some(pm) = detect_from_package_json(repo_root)? {
             return Ok(pm);
@@ -122,7 +117,6 @@ impl PackageManager {
 }
 
 /// Try to detect from the `packageManager` field in root package.json.
-/// Format: `"yarn@4.0.0"`, `"pnpm@9.0.0"`, `"npm@10.0.0"`
 fn detect_from_package_json(repo_root: &Path) -> Result<Option<PackageManager>> {
     let manifest = repo_root.join("package.json");
     let content = match std::fs::read_to_string(&manifest) {

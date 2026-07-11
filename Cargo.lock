@@ -3552,6 +3552,7 @@ dependencies = [
  "jsonschema",
  "octocrab",
  "openssl-sys",
+ "percent-encoding",
  "predicates",
  "rayon",
  "regex",

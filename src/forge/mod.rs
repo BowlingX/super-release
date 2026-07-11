@@ -1,9 +1,7 @@
 //! Provider-neutral "forge" abstraction.
 //!
-//! The compute and orchestration layers speak the neutral types in this module;
-//! each git host (GitHub today, GitLab/Bitbucket later) implements [`Forge`].
-//! The codebase is synchronous and provider clients are async, so calls are
-//! bridged at the boundary with [`block_on`].
+//! Each git host implements [`Forge`]; sync code bridges to async provider
+//! clients at the boundary with [`block_on`].
 
 pub mod github;
 
@@ -17,9 +15,15 @@ pub struct RepoRef {
     pub host: String,
 }
 
-/// A pull/merge-request context discovered from the CI environment. The id is a
-/// string to stay provider-neutral (numeric on git hosts, but e.g. issue trackers
-/// like JIRA use keys such as `PROJ-123`).
+impl RepoRef {
+    /// The repository's web (browser) URL, e.g. `https://github.com/owner/repo`.
+    pub fn web_url(&self) -> String {
+        format!("https://{}/{}/{}", self.host, self.owner, self.repo)
+    }
+}
+
+/// A pull/merge-request context from CI; the id is a string to stay provider-neutral
+/// (numeric on git hosts, keys like `PROJ-123` on issue trackers such as JIRA).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrContext {
     pub id: String,
@@ -45,8 +49,8 @@ impl UpsertAction {
     }
 }
 
-/// A release to create or update, and the assets to attach. Providers without a
-/// first-class release object (e.g. Bitbucket) may map this to a tag/downloads.
+/// A release to create or update with its assets; providers without a first-class
+/// release object (e.g. Bitbucket) may map this to a tag/downloads.
 pub struct ReleasePlan {
     pub tag: String,
     pub name: String,
@@ -56,9 +60,8 @@ pub struct ReleasePlan {
     pub assets: Vec<std::path::PathBuf>,
 }
 
-/// A "released" comment (and labels) to post on a resolved issue or PR. The id
-/// is a string to stay provider-neutral (numeric on git hosts, keys like
-/// `PROJ-123` on issue trackers).
+/// A "released" comment (and labels) to post on a resolved issue or PR; the id is
+/// a string to stay provider-neutral (keys like `PROJ-123` on issue trackers).
 pub struct IssueComment {
     pub id: String,
     /// Rendered comment body (the marker is added by the provider).
@@ -66,9 +69,8 @@ pub struct IssueComment {
     pub labels: Vec<String>,
 }
 
-/// A git host provider. All write operations take the API token and an optional
-/// API base URI (for self-hosted/Enterprise) and build their client internally,
-/// so the whole call stays on one runtime (see [`block_on`]).
+/// A git host provider; write operations build their client internally from the
+/// token and optional API base URI so the call stays on one runtime (see [`block_on`]).
 pub trait Forge: Send + Sync {
     /// The API token from the environment, if present.
     fn token(&self) -> Option<String>;
@@ -149,7 +151,6 @@ pub fn parse_repo_url(url: &str) -> Option<RepoRef> {
         return None;
     };
 
-    // Strip a leading `user@` and any `:port`.
     let host = host_part.rsplit('@').next().unwrap_or(host_part);
     let host = host.split(':').next().unwrap_or(host);
 
@@ -168,10 +169,8 @@ pub fn parse_repo_url(url: &str) -> Option<RepoRef> {
     })
 }
 
-/// Install a rustls crypto provider for the process. Provider clients use the
-/// process-default provider, which rustls can't auto-select when both `ring` and
-/// `aws-lc-rs` are in the tree (they are, transitively) — it panics. Install
-/// `ring` once; a no-op if some other component already installed one.
+/// Install `ring` as the rustls crypto provider once, since rustls can't auto-select
+/// (and panics) when both `ring` and `aws-lc-rs` are in the tree, as they transitively are.
 pub(crate) fn ensure_crypto_provider() {
     use std::sync::Once;
     static INIT: Once = Once::new();
@@ -180,8 +179,8 @@ pub(crate) fn ensure_crypto_provider() {
     });
 }
 
-/// Run a future to completion on a fresh current-thread runtime. This is the
-/// async→sync bridge that keeps the rest of the tool synchronous.
+/// Run a future to completion on a fresh current-thread runtime — the async→sync
+/// bridge that keeps the rest of the tool synchronous.
 pub fn block_on<F: std::future::Future>(fut: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -200,6 +199,18 @@ mod tests {
             repo: name.into(),
             host: host.into(),
         }
+    }
+
+    #[test]
+    fn web_url_is_host_owner_repo() {
+        assert_eq!(
+            repo("BowlingX", "super-release", "github.com").web_url(),
+            "https://github.com/BowlingX/super-release"
+        );
+        assert_eq!(
+            repo("acme", "widgets", "github.example.com").web_url(),
+            "https://github.example.com/acme/widgets"
+        );
     }
 
     #[test]

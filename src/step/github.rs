@@ -1,14 +1,15 @@
+mod comments;
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::changelog::{GithubContext, generate_release_notes, generate_release_notes_with_github};
 use super::{ReleaseContext, Step, StepConfig, StepContext, parse_options};
-use crate::commit::referenced_issues;
 use crate::forge::{self, Forge, github::GitHubForge};
+use crate::notes::{GithubContext, generate_release_notes, generate_release_notes_with_github};
 use crate::package::Package;
 use crate::version::PackageRelease;
+use comments::build_success_comments;
 
 /// Marker used to find (and avoid duplicating) our "released" comments.
 const RELEASED_MARKER: &str = "<!-- super-release:released -->";
@@ -41,7 +42,9 @@ pub struct GithubOptions {
     #[serde(default = "default_true")]
     pub comment_on_success: bool,
 
-    /// Success-comment template. Placeholders: `{releases}` (the tags), `{tag}`.
+    /// Success-comment template. Placeholders: `{releases}` (markdown links to
+    /// the released packages, named via `release_name_template`) and `{tag}`
+    /// (the first release's raw git tag).
     #[serde(default)]
     pub success_comment: Option<String>,
 
@@ -126,14 +129,8 @@ impl Step for GithubStep {
             return Ok(());
         }
 
-        // Assets and comments depend only on shared config, not on the
-        // individual release — compute them once.
+        // Assets depend only on shared config, not the individual release.
         let assets = resolve_assets(ctx.repo_root, &opts.assets)?;
-        let comments = if opts.comment_on_success {
-            build_success_comments(ctx, &opts, releases)
-        } else {
-            Vec::new()
-        };
 
         if ctx.dry_run {
             for release in releases {
@@ -148,8 +145,12 @@ impl Step for GithubStep {
                     assets.len()
                 );
             }
-            for c in &comments {
-                println!("  [github] Would comment on #{}", c.id);
+            if opts.comment_on_success {
+                // Nothing is published in a dry run, so there is no release URL to
+                // link to — only the target issue/PR ids are printed.
+                for c in build_success_comments(ctx, &opts, releases, None) {
+                    println!("  [github] Would comment on #{}", c.id);
+                }
             }
             return Ok(());
         }
@@ -171,13 +172,8 @@ impl Step for GithubStep {
             .clone()
             .or_else(|| forge.api_base_uri(&gh_repo));
 
-        // Each release body is generated enriched with GitHub contributors/PR
-        // links (see `build_plan`); the shared GitHub context is resolved once.
-        // This runs outside any tokio runtime — git-cliff blocks on its own.
-        let web_url = format!(
-            "https://{}/{}/{}",
-            gh_repo.host, gh_repo.owner, gh_repo.repo
-        );
+        // Resolved once; runs outside any tokio runtime because git-cliff blocks on its own.
+        let web_url = gh_repo.web_url();
         let gh = GithubContext {
             owner: &gh_repo.owner,
             repo: &gh_repo.repo,
@@ -206,70 +202,22 @@ impl Step for GithubStep {
             println!("  [github] {} release {}", action.verb(), tag);
         }
 
-        if !comments.is_empty() {
-            let n = forge.comment_on_issues(
-                &token,
-                base_uri.as_deref(),
-                &gh_repo,
-                RELEASED_MARKER,
-                &comments,
-            )?;
-            if n > 0 {
-                println!("  [github] Commented on {} resolved issue(s)/PR(s)", n);
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Aggregate the issues/PRs each release resolves into one comment per number,
-/// mentioning every tag that included it (a PR may touch several packages).
-fn build_success_comments(
-    ctx: &ReleaseContext,
-    opts: &GithubOptions,
-    releases: &[PackageRelease],
-) -> Vec<forge::IssueComment> {
-    let mut id_to_tags: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for release in releases {
-        let tag = ctx.cfg.format_tag(
-            &release.package_name,
-            &release.next_version,
-            release.is_root,
-        );
-        for commit in &release.commits {
-            for id in referenced_issues(&commit.raw_message) {
-                let tags = id_to_tags.entry(id).or_default();
-                if !tags.contains(&tag) {
-                    tags.push(tag.clone());
+        if opts.comment_on_success {
+            let comments = build_success_comments(ctx, &opts, releases, Some(&gh_repo));
+            if !comments.is_empty() {
+                let n = forge.comment_on_issues(
+                    &token,
+                    base_uri.as_deref(),
+                    &gh_repo,
+                    RELEASED_MARKER,
+                    &comments,
+                )?;
+                if n > 0 {
+                    println!("  [github] Commented on {} resolved issue(s)/PR(s)", n);
                 }
             }
         }
-    }
-
-    id_to_tags
-        .into_iter()
-        .map(|(id, tags)| forge::IssueComment {
-            id,
-            body: render_success_comment(opts.success_comment.as_deref(), &tags),
-            labels: opts.released_labels.clone(),
-        })
-        .collect()
-}
-
-fn render_success_comment(template: Option<&str>, tags: &[String]) -> String {
-    let releases = tags
-        .iter()
-        .map(|t| format!("`{}`", t))
-        .collect::<Vec<_>>()
-        .join(", ");
-    match template {
-        Some(t) => t
-            .replace("{releases}", &releases)
-            .replace("{tag}", tags.first().map(String::as_str).unwrap_or("")),
-        None => format!(
-            "🎉 This is included in the following release(s): {}",
-            releases
-        ),
+        Ok(())
     }
 }
 
@@ -332,8 +280,7 @@ fn render_release_name(template: Option<&str>, name: &str, version: &str, tag: &
     }
 }
 
-/// Expand asset glob patterns (relative to the repo root) into a deduplicated
-/// list of files. Patterns matching nothing are warned about, not fatal.
+/// Expand asset glob patterns into a deduplicated file list; patterns matching nothing warn but are not fatal.
 fn resolve_assets(repo_root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
     for pattern in patterns {
@@ -401,21 +348,7 @@ mod tests {
             .iter()
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
             .collect();
-        assert_eq!(names, vec!["a.tgz", "b.tgz"]); // sorted + deduped, directories excluded
-    }
-
-    #[test]
-    fn success_comment_default_lists_releases() {
-        let body = render_success_comment(None, &["v1.1.0".into(), "core/v2.0.0".into()]);
-        assert!(body.contains("`v1.1.0`"));
-        assert!(body.contains("`core/v2.0.0`"));
-    }
-
-    #[test]
-    fn success_comment_template_substitutes() {
-        let body =
-            render_success_comment(Some("Shipped in {tag} ({releases})"), &["v1.1.0".into()]);
-        assert_eq!(body, "Shipped in v1.1.0 (`v1.1.0`)");
+        assert_eq!(names, vec!["a.tgz", "b.tgz"]);
     }
 
     #[test]

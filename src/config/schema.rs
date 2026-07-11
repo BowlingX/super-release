@@ -2,10 +2,8 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-/// Bundled JSON schema for config validation.
 static SCHEMA_JSON: &str = include_str!("../../schema.json");
 
-/// Supported config file format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigFormat {
     Yaml,
@@ -20,7 +18,6 @@ const CANDIDATES: &[(&str, ConfigFormat)] = &[
     (".release.jsonc", ConfigFormat::Json),
 ];
 
-/// Detect the format from a file extension.
 fn detect_format(path: &Path) -> ConfigFormat {
     match path.extension().and_then(|e| e.to_str()) {
         Some("json" | "jsonc") => ConfigFormat::Json,
@@ -34,7 +31,6 @@ fn parse_jsonc(content: &str) -> Result<serde_json::Value> {
         .map_err(|e| anyhow::anyhow!("Failed to parse JSON: {}", e))
 }
 
-/// Parse raw config content into a serde_json::Value based on format.
 pub fn parse_to_json_value(content: &str, format: ConfigFormat) -> Result<serde_json::Value> {
     match format {
         ConfigFormat::Yaml => {
@@ -44,7 +40,6 @@ pub fn parse_to_json_value(content: &str, format: ConfigFormat) -> Result<serde_
     }
 }
 
-/// Parse raw config content into a Config struct.
 pub fn parse_config(content: &str, format: ConfigFormat) -> Result<super::Config> {
     match format {
         ConfigFormat::Yaml => {
@@ -57,15 +52,13 @@ pub fn parse_config(content: &str, format: ConfigFormat) -> Result<super::Config
     }
 }
 
-/// Compiled schema validator, cached for reuse.
 static SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(|| {
     let schema: serde_json::Value =
         serde_json::from_str(SCHEMA_JSON).expect("bundled schema.json is invalid — this is a bug");
     jsonschema::validator_for(&schema).expect("schema compilation failed — this is a bug")
 });
 
-/// Validate raw config content against the bundled JSON schema.
-/// Returns a list of validation error messages (empty = valid).
+/// Returns validation error messages against the bundled schema (empty = valid).
 pub fn validate(content: &str, format: ConfigFormat) -> Vec<String> {
     let json_value = match parse_to_json_value(content, format) {
         Ok(v) => v,
@@ -85,10 +78,7 @@ pub fn validate(content: &str, format: ConfigFormat) -> Vec<String> {
         .collect()
 }
 
-/// Locate and read the config file. Returns the raw content, path, and format.
-/// If `path` is a file, reads it directly. If it's a directory, searches for
-/// `.release.yaml`, `.release.json`, or `.release.jsonc`.
-/// Returns `None` if no config file was found (defaults will be used).
+/// Reads `path` directly if it is a file, else searches the directory for a candidate; `None` means no config found (defaults apply).
 pub fn find_config(path: &Path) -> Result<Option<(String, PathBuf, ConfigFormat)>> {
     if path.is_file() {
         let content =

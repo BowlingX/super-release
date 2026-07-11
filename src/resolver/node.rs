@@ -249,7 +249,6 @@ mod tests {
         update_package_version(&path, &semver::Version::new(1, 1, 0)).unwrap();
 
         let content = std::fs::read_to_string(&path).unwrap();
-        // Exact formatting preserved, only version value changed
         assert_eq!(
             content,
             r#"{"name":"@acme/core","version":"1.1.0","dependencies":{"@acme/utils":"^1.0.0"}}"#

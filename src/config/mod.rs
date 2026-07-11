@@ -14,12 +14,10 @@ pub struct Config {
     pub branches: Vec<BranchConfig>,
 
     /// Tag format template for the root package (default: "v{version}").
-    /// Supports `{version}` and `{name}` placeholders.
     #[serde(default = "default_tag_format")]
     pub tag_format: String,
 
     /// Tag format template for sub-packages (default: "{name}/v{version}").
-    /// Supports `{version}` and `{name}` placeholders.
     #[serde(default = "default_tag_format_package")]
     pub tag_format_package: String,
 
@@ -40,8 +38,7 @@ pub struct Config {
     #[serde(default)]
     pub dependencies: Vec<String>,
 
-    /// Glob patterns for files to ignore. Commits that ONLY touch ignored files
-    /// will not trigger a release for any package.
+    /// Commits that ONLY touch ignored files will not trigger a release for any package.
     #[serde(default)]
     pub ignore: Vec<String>,
 
@@ -67,7 +64,7 @@ pub struct GitConfig {
 
     /// Push all refs atomically (`git push --atomic`) so a lost push race
     /// can't leave partial state on the remote, e.g. tags without their
-    /// commit. Disable for servers without atomic push support.
+    /// commit.
     #[serde(default = "default_atomic")]
     pub atomic: bool,
 }
@@ -101,12 +98,10 @@ pub struct StepConfig {
     /// Step name (e.g., "changelog", "npm", "exec")
     pub name: String,
 
-    /// Glob patterns to filter which packages this step operates on.
     /// If empty, the step operates on all packages.
     #[serde(default)]
     pub packages: Vec<String>,
 
-    /// Glob patterns for branch names this step runs on.
     /// If empty, the step runs on all branches.
     #[serde(default)]
     pub branches: Vec<String>,
@@ -164,7 +159,6 @@ impl Default for Config {
     }
 }
 
-/// Resolve the repository root from a starting path.
 /// Returns both the root path and the opened Repository to avoid re-opening it.
 pub fn find_repo_root(start: &Path) -> Result<(PathBuf, git2::Repository)> {
     let repo = git2::Repository::discover(start)?;
@@ -183,9 +177,6 @@ pub fn resolve_branch_context(
 }
 
 /// Match a string against a glob pattern using the `glob-match` crate.
-/// Supports `*`, `?`, `[...]` character classes, and `{a,b}` alternations.
-///
-/// Examples: `"@acme/*"` matches `"@acme/core"`, `"test-*"` matches `"test-foo"`.
 pub fn glob_match(pattern: &str, value: &str) -> bool {
     glob_match::glob_match(pattern, value)
 }
@@ -280,7 +271,6 @@ mod tests {
 
     #[test]
     fn test_format_tag_semantic_release_compat() {
-        // semantic-release style: v{version} for root, {name}@{version} for packages
         let config = Config {
             tag_format: "v{version}".into(),
             tag_format_package: "{name}@{version}".into(),
@@ -345,28 +335,23 @@ steps:
 
     #[test]
     fn test_glob_match() {
-        // Exact
         assert!(glob_match("main", "main"));
         assert!(!glob_match("main", "master"));
 
-        // Wildcard *
         assert!(glob_match("*.x", "2.x"));
         assert!(glob_match("*.x", "15.x"));
         assert!(glob_match("test-*", "test-foo"));
         assert!(glob_match("test-*", "test-some-branch"));
         assert!(!glob_match("test-*", "dev-foo"));
 
-        // Scoped packages
         assert!(glob_match("@acme/*", "@acme/core"));
         assert!(glob_match("@acme/*", "@acme/utils"));
         assert!(!glob_match("@acme/*", "@other/core"));
 
-        // Alternation
         assert!(glob_match("{@acme/*,@tools/*}", "@acme/core"));
         assert!(glob_match("{@acme/*,@tools/*}", "@tools/cli"));
         assert!(!glob_match("{@acme/*,@tools/*}", "@other/lib"));
 
-        // Single char ?
         assert!(glob_match("pkg-?", "pkg-a"));
         assert!(!glob_match("pkg-?", "pkg-ab"));
     }
