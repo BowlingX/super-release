@@ -42,6 +42,9 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: super-release-linux-aarch64
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            artifact: super-release-linux-aarch64-musl
           - target: x86_64-apple-darwin
             os: macos-latest
             artifact: super-release-darwin-x86_64
@@ -72,8 +75,19 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu perl make
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
+      - name: Install cross
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
       - name: Build
+        if: matrix.target != 'aarch64-unknown-linux-musl'
         run: cargo build --release --target ${{ matrix.target }} --features vendored-openssl
+
+      - name: Build (cross)
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: cross build --release --target ${{ matrix.target }} --features vendored-openssl
 
       - name: Package (Unix)
         if: runner.os != 'Windows'

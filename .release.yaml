@@ -15,6 +15,9 @@ dependencies:
   - 'Cargo.lock'
   - 'src/**'
   - '.github/workflows/*.yml'
+  - action.yml
+  - Dockerfile
+  - entrypoint.sh
 
 steps:
   - name: changelog

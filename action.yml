@@ -1,0 +1,45 @@
+name: super-release
+description: A fast semantic-release alternative for monorepos — versioning, changelogs, npm publish, and GitHub Releases.
+author: BowlingX
+branding:
+  icon: tag
+  color: blue
+
+inputs:
+  github-token:
+    description: Token for the GitHub API (releases, PR/issue comments). Defaults to the workflow token.
+    default: ${{ github.token }}
+  config:
+    description: 'Path to the config file (default: .release.yaml in the working directory).'
+    required: false
+  dry-run:
+    description: Show what would happen without making any changes.
+    default: 'false'
+  preview:
+    description: Render a PR release preview (post/update a sticky comment) instead of releasing.
+    default: 'false'
+  package:
+    description: Filter to a specific package.
+    required: false
+  working-directory:
+    description: 'Repository root to operate on (default: the checkout root).'
+    required: false
+  dangerously-skip-config-check:
+    description: Skip config validation against the JSON schema.
+    default: 'false'
+  args:
+    description: Extra raw CLI flags passed through verbatim
+    required: false
+
+runs:
+  using: docker
+  image: docker://ghcr.io/bowlingx/super-release:v1
+  env:
+    INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+    INPUT_CONFIG: ${{ inputs.config }}
+    INPUT_DRY_RUN: ${{ inputs.dry-run }}
+    INPUT_PREVIEW: ${{ inputs.preview }}
+    INPUT_PACKAGE: ${{ inputs.package }}
+    INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+    INPUT_DANGEROUSLY_SKIP_CONFIG_CHECK: ${{ inputs.dangerously-skip-config-check }}
+    INPUT_ARGS: ${{ inputs.args }}
