@@ -1,0 +1,7 @@
+*
+!Dockerfile
+!entrypoint.sh
+!artifacts
+artifacts/*
+!artifacts/super-release-linux-x86_64-musl
+!artifacts/super-release-linux-aarch64-musl

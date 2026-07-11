@@ -43,6 +43,91 @@ Alternatively, build from source:
 cargo install --path .
 ```
 
+## GitHub Action
+
+Run super-release with a single `uses:`. It is a Docker container action published
+to GHCR, so it runs on **Linux runners only**.
+
+```yaml
+name: Release
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write # create releases and tags
+  issues: write # "released" comments/labels (optional)
+  pull-requests: write # PR preview / released comments (optional)
+  id-token: write # npm provenance (optional)
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history + tags are required
+      # Only if you publish to npm:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - uses: bowlingx/super-release@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # only if publishing to npm
+```
+
+On pull requests, set `preview: true` to post a sticky comment with the next
+version and rendered release notes (needs `pull-requests: write`):
+
+```yaml
+- uses: bowlingx/super-release@v1
+  with:
+    preview: true
+  env:
+    GITHUB_TOKEN: ${{ github.token }}
+```
+
+### Inputs
+
+| Input                           | Default               | Description                                            |
+|---------------------------------|-----------------------|--------------------------------------------------------|
+| `github-token`                  | `${{ github.token }}` | Token for the GitHub API (releases, comments).         |
+| `dry-run`                       | `false`               | Show what would happen without making changes.         |
+| `preview`                       | `false`               | Post/update a PR preview comment instead of releasing. |
+| `config`                        |                       | Path to the config file (default `.release.yaml`).     |
+| `package`                       |                       | Filter to a specific package.                          |
+| `working-directory`             |                       | Repository root to operate on.                         |
+| `dangerously-skip-config-check` | `false`               | Skip config-schema validation.                         |
+| `args`                          |                       | Extra raw CLI flags (escape hatch).                    |
+
+**Requirements**
+
+- **`fetch-depth: 0`** — version bumps are computed from the full history and all
+  tags; a shallow checkout produces wrong versions.
+- **`contents: write`** and a token, to create releases and tags.
+- **npm auth** (only if you publish to npm) is configured out of band, exactly like
+  any npm workflow: `actions/setup-node` with `registry-url` plus `NODE_AUTH_TOKEN`,
+  or an `.npmrc`.
+
+Pin to a major with `@v1`; the action resolves the matching `:v1` image (latest
+1.x). For a fully pinned image, use the [Docker](#docker) usage with a `:X.Y.Z` tag.
+
+## Docker
+
+The same image is published to GHCR for use from any CI or locally:
+
+```bash
+docker run --rm \
+  -v "$PWD:/repo" -w /repo \
+  -e GITHUB_TOKEN \
+  ghcr.io/bowlingx/super-release:v1 --dry-run
+```
+
+Tags: `:v1` (latest 1.x), `:latest`, `:X.Y.Z` (exact), `:sha-<commit>`. The image is
+Alpine-based and bundles `git` and Node.js (for the `npm` step).
+
 ## Quick Start
 
 ```bash
