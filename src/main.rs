@@ -758,7 +758,29 @@ fn run_preview(
         .map(|r| r.package_name.clone())
         .collect();
 
-    let markdown = preview::render_preview_markdown(&releases, &notes_packages, cfg);
+    // Preview notes with the changelog step's custom template, if one is set
+    // (best-effort: a broken template path here just falls back to the default).
+    let changelog_template = cfg
+        .steps
+        .iter()
+        .find(|s| s.name == "changelog" && step_runs_on_branch(s, &base_branch))
+        .and_then(|s| step::parse_options::<step::changelog::ChangelogOptions>(s).ok())
+        .and_then(|opts| {
+            step::resolve_template(
+                repo_root,
+                opts.template.as_deref(),
+                opts.template_file.as_deref(),
+            )
+            .ok()
+            .flatten()
+        });
+
+    let markdown = preview::render_preview_markdown(
+        &releases,
+        &notes_packages,
+        changelog_template.as_deref(),
+        cfg,
+    );
 
     let pr_id = cli
         .pr
@@ -887,7 +909,22 @@ fn run_release_phase(
     releases: &[version::PackageRelease],
     dry_run: bool,
 ) -> Result<()> {
-    // Steps that do release-phase work (e.g. github) print their own header.
+    // Print the phase header once, if any step actually has release-phase work
+    // for a released package on this branch.
+    let has_release_work = cfg
+        .steps
+        .iter()
+        .filter(|s| step_runs_on_branch(s, &branch_ctx.branch_name))
+        .filter(|s| step::create_step(&s.name).is_some_and(|p| p.has_release_phase()))
+        .any(|s| {
+            releases
+                .iter()
+                .any(|r| step_covers_package(s, &r.package_name))
+        });
+    if has_release_work {
+        printfl!("{} Publishing releases", style(">>").bold().blue());
+    }
+
     let release_ctx = step::ReleaseContext {
         repo_root,
         dry_run,

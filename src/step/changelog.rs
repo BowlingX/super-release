@@ -19,12 +19,21 @@ use crate::version::PackageRelease;
 static CLIFF_CONFIG: LazyLock<CliffConfig> =
     LazyLock::new(|| "".parse().expect("Failed to load git-cliff default config"));
 
-/// git-cliff's built-in GitHub template + config, parsed once and cloned per
-/// enriched release (the remote/token is set on the clone).
+/// A git-cliff body template: the default conventional grouping (feat/fix/…
+/// sections), plus GitHub attribution (`by @author in #PR`), "New Contributors"
+/// and full "Contributors" lists, and a "Full Changelog" link. The compare link
+/// and PR links use `extra.repo_url` / `extra.tag` / `extra.previous_tag` so they
+/// point at the real tag names, not the bare version. Embedded at compile time
+/// so it still ships in the distributed binary.
+const GITHUB_GROUPED_BODY: &str = include_str!("../../templates/github-release-body.tera");
+
+/// The config for GitHub-enriched notes: the default git-cliff config (grouping
+/// via commit parsers) with our [`GITHUB_GROUPED_BODY`] body. Parsed once; the
+/// remote/token is set on the clone per release.
 static GITHUB_CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
-    git_cliff_core::embed::BuiltinConfig::parse("github".to_string())
-        .expect("Failed to load git-cliff github template")
-        .0
+    let mut config: CliffConfig = "".parse().expect("Failed to load git-cliff default config");
+    config.changelog.body = GITHUB_GROUPED_BODY.to_string();
+    config
 });
 
 /// Options for the changelog step.
@@ -37,6 +46,15 @@ pub struct ChangelogOptions {
     /// Max lines to show in dry-run preview (default: 20)
     #[serde(default = "default_preview_lines")]
     pub preview_lines: usize,
+
+    /// Inline git-cliff body template overriding the default (grouped) format.
+    #[serde(default)]
+    pub template: Option<String>,
+
+    /// Path (relative to the repo root) to a git-cliff body template file.
+    /// Takes precedence over `template`.
+    #[serde(default)]
+    pub template_file: Option<String>,
 }
 
 impl Default for ChangelogOptions {
@@ -44,6 +62,8 @@ impl Default for ChangelogOptions {
         Self {
             filename: default_filename(),
             preview_lines: default_preview_lines(),
+            template: None,
+            template_file: None,
         }
     }
 }
@@ -80,6 +100,12 @@ impl Step for ChangelogStep {
         releases: &[PackageRelease],
     ) -> Result<Vec<PathBuf>> {
         let opts: ChangelogOptions = parse_options(config)?;
+        // Resolve the custom template once (reads a file) before fanning out.
+        let template = super::resolve_template(
+            ctx.repo_root,
+            opts.template.as_deref(),
+            opts.template_file.as_deref(),
+        )?;
 
         // Generate changelogs per package in parallel
         let results: Vec<PreparedChangelog> = releases
@@ -99,7 +125,7 @@ impl Step for ChangelogStep {
                 let notes = if changelog_contains_version(&existing, &next_version) {
                     None
                 } else {
-                    Some(generate_release_notes(release)?)
+                    Some(generate_release_notes(release, template.as_deref())?)
                 };
 
                 Ok(PreparedChangelog {
@@ -189,8 +215,18 @@ pub fn to_cliff_commits(commits: &[ConventionalCommit]) -> Vec<CliffCommit<'_>> 
 }
 
 /// Generate markdown release notes for a package release using git-cliff.
-pub fn generate_release_notes(release: &PackageRelease) -> Result<String> {
-    let cliff_release = CliffRelease {
+/// `template` overrides the default (grouped conventional) body.
+pub fn generate_release_notes(release: &PackageRelease, template: Option<&str>) -> Result<String> {
+    let mut config = CLIFF_CONFIG.clone();
+    if let Some(body) = template {
+        config.changelog.body = body.to_string();
+    }
+    render_changelog(config, plain_release(release))
+}
+
+/// Build a git-cliff release from ours, for offline (no-remote) rendering.
+fn plain_release(release: &PackageRelease) -> CliffRelease<'_> {
+    CliffRelease {
         version: Some(release.next_version.to_string()),
         commits: to_cliff_commits(&release.commits),
         timestamp: Some(chrono::Local::now().timestamp()),
@@ -199,17 +235,7 @@ pub fn generate_release_notes(release: &PackageRelease) -> Result<String> {
             ..Default::default()
         })),
         ..Default::default()
-    };
-
-    let changelog = Changelog::new(vec![cliff_release], CLIFF_CONFIG.clone(), None)
-        .map_err(|e| anyhow::anyhow!("Failed to create changelog: {}", e))?;
-
-    let mut output = Vec::new();
-    changelog
-        .generate(&mut output)
-        .map_err(|e| anyhow::anyhow!("Failed to generate changelog: {}", e))?;
-
-    Ok(String::from_utf8(output)?)
+    }
 }
 
 /// Where to fetch GitHub metadata (contributors, PR links) from.
@@ -222,54 +248,102 @@ pub struct GithubContext<'a> {
     /// The release's HEAD commit SHA — lets git-cliff decide who is a
     /// first-time contributor accurately (otherwise it over-reports).
     pub head_commit_id: Option<String>,
+    /// The repo's web URL (`https://host/owner/repo`) for PR and compare links.
+    pub web_url: &'a str,
 }
 
 /// Generate release notes enriched with GitHub data — PR links, `@author`
-/// mentions, and a "New Contributors" section — using git-cliff's GitHub
-/// template. Makes GitHub API calls (cached on disk). Uses full commit SHAs so
-/// git-cliff can match commits to their pull requests.
+/// mentions, and a "New Contributors" section. Makes GitHub API calls (cached on
+/// disk). Uses full commit SHAs so git-cliff can match commits to their pull
+/// requests. `tag`/`previous_tag` are the real tag names, used for the compare
+/// link (the version alone would produce a wrong URL for prefixed tags).
 ///
 /// Must NOT be called from within a tokio runtime: `Changelog::new` spins up its
 /// own runtime and blocks.
 pub fn generate_release_notes_with_github(
     release: &PackageRelease,
     gh: &GithubContext,
+    tag: &str,
+    previous_tag: &str,
+    template: Option<&str>,
 ) -> Result<String> {
     use git_cliff_core::config::Remote;
 
-    // git-cliff's built-in GitHub template renders "What's Changed", PR links,
-    // and "New Contributors" — the GitHub-native release style.
-    let mut config = GITHUB_CLIFF_CONFIG.clone();
-    config.remote.offline = false;
-    config.remote.github = Remote {
-        owner: gh.owner.to_string(),
-        repo: gh.repo.to_string(),
-        token: Some(secrecy::SecretString::new(gh.token.to_string())),
-        is_custom: true,
-        api_url: gh.api_url.map(String::from),
-        ..Default::default()
+    let build_config = |offline: bool| {
+        let mut config = GITHUB_CLIFF_CONFIG.clone();
+        if let Some(body) = template {
+            config.changelog.body = body.to_string();
+        }
+        config.remote.offline = offline;
+        if !offline {
+            config.remote.github = Remote {
+                owner: gh.owner.to_string(),
+                repo: gh.repo.to_string(),
+                token: Some(secrecy::SecretString::new(gh.token.to_string())),
+                is_custom: true,
+                api_url: gh.api_url.map(String::from),
+                ..Default::default()
+            };
+        }
+        config
+    };
+    let build_release = || {
+        enriched_release(
+            release,
+            gh.head_commit_id.clone(),
+            gh.web_url,
+            tag,
+            previous_tag,
+        )
     };
 
-    let cliff_release = CliffRelease {
+    // Try with the GitHub fetch; if it fails (network, bad token, rate limit),
+    // render the same template offline — grouped notes + the compare link still
+    // come through, just without contributor attribution.
+    match render_changelog(build_config(false), build_release()) {
+        Ok(notes) => Ok(notes),
+        Err(_) => render_changelog(build_config(true), build_release()),
+    }
+}
+
+/// Build a git-cliff release from ours, attaching the tag/URL data the template
+/// needs via `extra`.
+fn enriched_release<'a>(
+    release: &'a PackageRelease,
+    head_commit_id: Option<String>,
+    web_url: &str,
+    tag: &str,
+    previous_tag: &str,
+) -> CliffRelease<'a> {
+    CliffRelease {
         version: Some(release.next_version.to_string()),
         commits: to_cliff_commits(&release.commits),
-        commit_id: gh.head_commit_id.clone(),
+        commit_id: head_commit_id,
         timestamp: Some(chrono::Local::now().timestamp()),
         previous: Some(Box::new(CliffRelease {
             version: Some(release.current_version.to_string()),
             ..Default::default()
         })),
+        extra: Some(serde_json::json!({
+            "repo_url": web_url,
+            "tag": tag,
+            "previous_tag": previous_tag,
+        })),
         ..Default::default()
-    };
+    }
+}
 
-    // git-cliff's `Changelog::new` fetches GitHub metadata and `.expect()`s on
-    // failure (network, bad token, rate limit) — a panic, not an error. Isolate
-    // it: silence the hook, catch the unwind, and surface an Err so the caller
-    // falls back to plain notes instead of crashing the release.
+/// Build and render a git-cliff changelog, isolating the fetch panic.
+///
+/// git-cliff's `Changelog::new` fetches GitHub metadata (when the remote is set)
+/// and `.expect()`s on failure (network, bad token, rate limit) — a panic, not
+/// an error. Silence the hook, catch the unwind, and surface an `Err` so the
+/// caller can fall back to plain notes instead of crashing the release.
+fn render_changelog(config: CliffConfig, release: CliffRelease) -> Result<String> {
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Changelog::new(vec![cliff_release], config, None)
+        Changelog::new(vec![release], config, None)
     }));
     std::panic::set_hook(prev_hook);
 
@@ -335,7 +409,7 @@ mod tests {
             propagated_from: None,
         };
 
-        let notes = generate_release_notes(&release).unwrap();
+        let notes = generate_release_notes(&release, None).unwrap();
         assert!(
             changelog_contains_version(&notes, "1.1.0"),
             "generated notes no longer match the expected heading format:\n{}",
@@ -387,8 +461,139 @@ mod tests {
             token: "definitely-not-a-valid-token",
             api_url: None,
             head_commit_id: None,
+            web_url: "https://github.com/BowlingX/super-release",
         };
         // Must return Err (caught), not unwind past this call.
-        assert!(generate_release_notes_with_github(&release, &gh).is_err());
+        assert!(
+            generate_release_notes_with_github(&release, &gh, "p/v1.1.0", "p/v1.0.0", None)
+                .is_err()
+        );
+    }
+
+    /// The grouped GitHub template renders offline (no fetch): conventional
+    /// grouping, and a "Full Changelog" link built from the real tag names
+    /// (not the bare version). Attribution needs a live fetch, so it's absent
+    /// here — but the grouping and compare link are what this pins.
+    #[test]
+    fn grouped_template_renders_grouping_and_compare_link_offline() {
+        fn commit(msg: &str) -> ConventionalCommit {
+            ConventionalCommit {
+                hash: "0000000".into(),
+                oid: None,
+                commit_type: String::new(),
+                scope: None,
+                description: String::new(),
+                body: None,
+                breaking: false,
+                bump: BumpLevel::None,
+                raw_message: msg.into(),
+                files_changed: vec![],
+            }
+        }
+        let release = PackageRelease {
+            package_name: "pkg".into(),
+            current_version: semver::Version::new(1, 0, 0),
+            next_version: semver::Version::new(1, 1, 0),
+            bump: BumpLevel::Minor,
+            commits: vec![commit("feat: add a thing"), commit("fix: fix a thing")],
+            is_root: false,
+            propagated_from: None,
+        };
+
+        let mut config = GITHUB_CLIFF_CONFIG.clone();
+        config.remote.offline = true; // no network fetch
+        let cliff = enriched_release(
+            &release,
+            None,
+            "https://github.com/o/r",
+            "pkg/v1.1.0",
+            "pkg/v1.0.0",
+        );
+        let notes = render_changelog(config, cliff).unwrap();
+
+        assert!(
+            notes.contains("Add a thing"),
+            "missing feature commit:\n{notes}"
+        );
+        assert!(
+            notes.contains("Fix a thing"),
+            "missing fix commit:\n{notes}"
+        );
+        assert!(
+            notes.contains("### "),
+            "no grouped section heading:\n{notes}"
+        );
+        assert!(
+            notes.contains("https://github.com/o/r/compare/pkg/v1.0.0...pkg/v1.1.0"),
+            "compare link missing or wrong:\n{notes}"
+        );
+    }
+
+    /// The github template lists all contributors plus a New Contributors
+    /// highlight, dropping unlinked authors (`username = None`). Renders offline
+    /// by setting the `github` metadata directly (no fetch).
+    #[test]
+    fn contributors_and_new_contributors_render() {
+        use git_cliff_core::contributor::RemoteContributor;
+        use git_cliff_core::remote::RemoteReleaseMetadata;
+
+        let contributor = |name: Option<&str>, first_time: bool| RemoteContributor {
+            username: name.map(String::from),
+            pr_title: None,
+            pr_number: None,
+            pr_labels: vec![],
+            is_first_time: first_time,
+        };
+        let cliff = CliffRelease {
+            version: Some("1.1.0".into()),
+            commits: vec![CliffCommit::new("aaaaaaa".into(), "feat: a thing".into())],
+            timestamp: Some(0),
+            github: RemoteReleaseMetadata {
+                contributors: vec![
+                    contributor(Some("alice"), true),
+                    contributor(Some("bob"), false),
+                    contributor(None, false), // unlinked author — must be dropped
+                ],
+            },
+            extra: Some(serde_json::json!({
+                "repo_url": "https://github.com/o/r",
+                "tag": "pkg/v1.1.0",
+                "previous_tag": "pkg/v1.0.0",
+            })),
+            ..Default::default()
+        };
+
+        let mut config = GITHUB_CLIFF_CONFIG.clone();
+        config.remote.offline = true;
+        let notes = render_changelog(config, cliff).unwrap();
+
+        assert!(notes.contains("### 🎉 New Contributors"), "{notes}");
+        assert!(
+            notes.contains("@alice made their first contribution"),
+            "{notes}"
+        );
+        assert!(notes.contains("### 👥 Contributors"), "{notes}");
+        assert!(notes.contains("- @alice"), "{notes}");
+        assert!(notes.contains("- @bob"), "{notes}");
+        assert!(!notes.contains("- @\n"), "unlinked author leaked:\n{notes}");
+    }
+
+    /// A custom template overrides the default body.
+    #[test]
+    fn custom_template_overrides_body() {
+        let release = PackageRelease {
+            package_name: "p".into(),
+            current_version: semver::Version::new(1, 0, 0),
+            next_version: semver::Version::new(1, 1, 0),
+            bump: BumpLevel::Minor,
+            commits: vec![],
+            is_root: false,
+            propagated_from: None,
+        };
+        let notes = generate_release_notes(&release, Some("CUSTOM v{{ version }}")).unwrap();
+        assert!(
+            notes.contains("CUSTOM v1.1.0"),
+            "custom template not applied:\n{notes}"
+        );
     }
 }
