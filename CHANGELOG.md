@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.8.1] - 2026-07-11
+
+### 🐛 Bug Fixes
+
+- Adjusted mutable release handling
 ## [1.8.0] - 2026-07-11
 
 ### 🚀 Features
