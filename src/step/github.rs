@@ -1,9 +1,10 @@
 use anyhow::{Context, Result};
+use console::style;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::changelog::generate_release_notes;
+use super::changelog::{GithubContext, generate_release_notes, generate_release_notes_with_github};
 use super::{ReleaseContext, Step, StepConfig, StepContext, parse_options};
 use crate::commit::referenced_issues;
 use crate::forge::{self, Forge, github::GitHubForge};
@@ -103,12 +104,11 @@ impl Step for GithubStep {
         if releases.is_empty() {
             return Ok(());
         }
+        println!("{} Publishing releases", style(">>").bold().blue());
 
-        let plans = releases
-            .iter()
-            .map(|r| build_plan(ctx, &opts, r))
-            .collect::<Result<Vec<_>>>()?;
-
+        // Assets and comments depend only on shared config, not on the
+        // individual release — compute them once.
+        let assets = resolve_assets(ctx.repo_root, &opts.assets)?;
         let comments = if opts.comment_on_success {
             build_success_comments(ctx, &opts, releases)
         } else {
@@ -116,11 +116,16 @@ impl Step for GithubStep {
         };
 
         if ctx.dry_run {
-            for plan in &plans {
+            for release in releases {
+                let tag = ctx.cfg.format_tag(
+                    &release.package_name,
+                    &release.next_version,
+                    release.is_root,
+                );
                 println!(
                     "  [github] Would create release {} ({} asset(s))",
-                    plan.tag,
-                    plan.assets.len()
+                    tag,
+                    assets.len()
                 );
             }
             for c in &comments {
@@ -145,6 +150,26 @@ impl Step for GithubStep {
             .github_url
             .clone()
             .or_else(|| forge.api_base_uri(&gh_repo));
+
+        // Each release body is generated enriched with GitHub contributors/PR
+        // links (see `build_plan`); the shared GitHub context is resolved once.
+        // This runs outside any tokio runtime — git-cliff blocks on its own.
+        let gh = GithubContext {
+            owner: &gh_repo.owner,
+            repo: &gh_repo.repo,
+            token: &token,
+            api_url: base_uri.as_deref(),
+            head_commit_id: ctx
+                .repo
+                .head()
+                .ok()
+                .and_then(|h| h.peel_to_commit().ok())
+                .map(|c| c.id().to_string()),
+        };
+        let plans: Vec<_> = releases
+            .iter()
+            .map(|r| build_plan(ctx, &opts, r, &assets, &gh))
+            .collect();
 
         let results = forge.publish_releases(&token, base_uri.as_deref(), &gh_repo, &plans)?;
         for (tag, action) in results {
@@ -222,7 +247,9 @@ fn build_plan(
     ctx: &ReleaseContext,
     opts: &GithubOptions,
     release: &PackageRelease,
-) -> Result<forge::ReleasePlan> {
+    assets: &[PathBuf],
+    gh: &GithubContext,
+) -> forge::ReleasePlan {
     let tag = ctx.cfg.format_tag(
         &release.package_name,
         &release.next_version,
@@ -237,17 +264,24 @@ fn build_plan(
     let prerelease = opts
         .prerelease
         .unwrap_or_else(|| ctx.branch.prerelease.is_some());
-    let body = generate_release_notes(release)?;
-    let assets = resolve_assets(ctx.repo_root, &opts.assets)?;
+    // Enrich with contributors/PR links, falling back to plain notes if the
+    // GitHub fetch fails.
+    let body = generate_release_notes_with_github(release, gh).unwrap_or_else(|e| {
+        eprintln!(
+            "  [github] Warning: could not fetch contributor info for {}, using plain notes: {}",
+            tag, e
+        );
+        generate_release_notes(release).unwrap_or_default()
+    });
 
-    Ok(forge::ReleasePlan {
+    forge::ReleasePlan {
         tag,
         name,
         body,
         draft: opts.draft,
         prerelease,
-        assets,
-    })
+        assets: assets.to_vec(),
+    }
 }
 
 fn render_release_name(template: Option<&str>, name: &str, version: &str, tag: &str) -> String {

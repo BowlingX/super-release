@@ -95,9 +95,8 @@ impl Forge for GitHubForge {
         block_on(async move {
             let client = build_client(token, api_url).await?;
             let issues = client.issues(&repo.owner, &repo.repo);
-            let first = issues.list_comments(number).per_page(100).send().await?;
-            let comments = client.all_pages(first).await?;
-            let existing = comments
+            let existing = all_issue_comments(&client, repo, number)
+                .await?
                 .iter()
                 .find(|c| c.body.as_deref().is_some_and(|b| b.contains(marker)))
                 .map(|c| c.id);
@@ -211,9 +210,8 @@ impl Forge for GitHubForge {
             for item in items {
                 let posted: Result<bool> = async {
                     let number = numeric_id(&item.id)?;
-                    let first = issues.list_comments(number).per_page(100).send().await?;
-                    let comments = client.all_pages(first).await?;
-                    if comments
+                    if all_issue_comments(&client, repo, number)
+                        .await?
                         .iter()
                         .any(|c| c.body.as_deref().is_some_and(|b| b.contains(marker)))
                     {
@@ -256,6 +254,21 @@ impl Forge for GitHubForge {
 fn numeric_id(id: &str) -> Result<u64> {
     id.parse::<u64>()
         .map_err(|_| anyhow::anyhow!("GitHub issue/PR id must be numeric, got '{}'", id))
+}
+
+/// Fetch all comments on an issue/PR (following pagination).
+async fn all_issue_comments(
+    client: &Octocrab,
+    repo: &RepoRef,
+    number: u64,
+) -> Result<Vec<octocrab::models::issues::Comment>> {
+    let first = client
+        .issues(&repo.owner, &repo.repo)
+        .list_comments(number)
+        .per_page(100)
+        .send()
+        .await?;
+    Ok(client.all_pages(first).await?)
 }
 
 fn is_github_dot_com(host: &str) -> bool {

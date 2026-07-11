@@ -393,10 +393,14 @@ Steps return the files they modified. The core git step stages exactly those fil
 
 The `github` step runs **after** the commit and tags are pushed, so it needs `git.push: true` and a
 `GITHUB_TOKEN` (or `GH_TOKEN`) with `contents: write` (and `issues: write` + `pull-requests: write` for
-comments). It creates one GitHub Release per released package (idempotent -- safe to re-run), using the same
-git-cliff notes as the changelog, and comments on the PRs/issues each release resolved (detected from `(#N)`
-squash/merge subjects and `closes/fixes #N` keywords), adding a `released` label. Comments are posted once
-(marker-guarded), so re-runs don't duplicate them.
+comments). It creates one GitHub Release per released package (idempotent -- safe to re-run) and comments on the
+PRs/issues each release resolved (detected from `(#N)` squash/merge subjects and `closes/fixes #N` keywords),
+adding a `released` label. Comments are posted once (marker-guarded), so re-runs don't duplicate them.
+
+Release bodies are enriched with GitHub data when a token is available -- a "What's Changed" list with `@author`
+mentions and PR links, plus a "New Contributors" section -- via git-cliff's GitHub integration (the API calls are
+cached on disk, and fall back to the plain git-cliff notes if the fetch fails). The `CHANGELOG.md` file keeps its
+conventional grouped format.
 
 Default: `[changelog, npm]`
 

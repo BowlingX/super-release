@@ -301,26 +301,17 @@ fn main() -> Result<()> {
         version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
 
     // Apply branch-level package filter
-    if !branch_ctx.packages.is_empty() {
-        let before = releases.len();
-        releases.retain(|r| {
-            branch_ctx
-                .packages
-                .iter()
-                .any(|pat| config::glob_match(pat, &r.package_name))
-        });
-        verbosefl!(verbose_mode, {
-            let skipped = before - releases.len();
-            if skipped > 0 {
-                printfl!(
-                    "{} Skipped {} package(s) not included in branch '{}' config",
-                    style(">>").dim(),
-                    skipped,
-                    branch_ctx.branch_name
-                );
-            }
-        });
-    }
+    let skipped = apply_branch_package_filter(&mut releases, &branch_ctx);
+    verbosefl!(verbose_mode, {
+        if skipped > 0 {
+            printfl!(
+                "{} Skipped {} package(s) not included in branch '{}' config",
+                style(">>").dim(),
+                skipped,
+                branch_ctx.branch_name
+            );
+        }
+    });
 
     if cli.show_next_version {
         return show_next_version(&packages, &releases, cli.package.as_deref());
@@ -757,16 +748,17 @@ fn run_preview(
         });
 
     let mut releases = version::determine_releases(repo, repo_root, packages, cfg, &branch_ctx)?;
-    if !branch_ctx.packages.is_empty() {
-        releases.retain(|r| {
-            branch_ctx
-                .packages
-                .iter()
-                .any(|pat| config::glob_match(pat, &r.package_name))
-        });
-    }
+    apply_branch_package_filter(&mut releases, &branch_ctx);
 
-    let markdown = preview::render_preview_markdown(&releases, cfg);
+    // Only preview notes for packages a `changelog` step would actually cover on
+    // this branch — mirror the workflow's per-step branch + package filtering.
+    let notes_packages: std::collections::HashSet<String> = releases
+        .iter()
+        .filter(|r| changelog_covers(cfg, &base_branch, &r.package_name))
+        .map(|r| r.package_name.clone())
+        .collect();
+
+    let markdown = preview::render_preview_markdown(&releases, &notes_packages, cfg);
 
     let pr_id = cli
         .pr
@@ -814,6 +806,25 @@ fn run_preview(
     Ok(())
 }
 
+/// Retain only releases whose package matches the branch's package filter
+/// (an empty filter keeps all). Returns how many releases were removed.
+fn apply_branch_package_filter(
+    releases: &mut Vec<version::PackageRelease>,
+    branch_ctx: &config::BranchContext,
+) -> usize {
+    if branch_ctx.packages.is_empty() {
+        return 0;
+    }
+    let before = releases.len();
+    releases.retain(|r| {
+        branch_ctx
+            .packages
+            .iter()
+            .any(|pat| config::glob_match(pat, &r.package_name))
+    });
+    before - releases.len()
+}
+
 /// Whether a step should run on the current branch given its `branches` filter.
 fn step_runs_on_branch(step_cfg: &config::StepConfig, branch_name: &str) -> bool {
     step_cfg.branches.is_empty()
@@ -833,23 +844,37 @@ fn filter_for_step(
     if step_cfg.packages.is_empty() {
         return (packages.to_vec(), releases.to_vec());
     }
-    let matches = |name: &str| {
-        step_cfg
-            .packages
-            .iter()
-            .any(|pat| config::glob_match(pat, name))
-    };
     let fp = packages
         .iter()
-        .filter(|p| matches(&p.name))
+        .filter(|p| step_covers_package(step_cfg, &p.name))
         .cloned()
         .collect();
     let fr = releases
         .iter()
-        .filter(|r| matches(&r.package_name))
+        .filter(|r| step_covers_package(step_cfg, &r.package_name))
         .cloned()
         .collect();
     (fp, fr)
+}
+
+/// Whether a step operates on a package, given its `packages` glob filter
+/// (an empty filter matches all packages).
+fn step_covers_package(step_cfg: &config::StepConfig, package_name: &str) -> bool {
+    step_cfg.packages.is_empty()
+        || step_cfg
+            .packages
+            .iter()
+            .any(|pat| config::glob_match(pat, package_name))
+}
+
+/// Whether a `changelog` step would generate notes for this package on this
+/// branch — mirrors the per-step branch + package filtering used at release time.
+fn changelog_covers(cfg: &config::Config, branch_name: &str, package_name: &str) -> bool {
+    cfg.steps.iter().any(|s| {
+        s.name == "changelog"
+            && step_runs_on_branch(s, branch_name)
+            && step_covers_package(s, package_name)
+    })
 }
 
 /// Run each step's `release` phase after the git commit and tags are pushed.
@@ -862,10 +887,7 @@ fn run_release_phase(
     releases: &[version::PackageRelease],
     dry_run: bool,
 ) -> Result<()> {
-    if cfg.steps.iter().any(|s| s.name == "github") {
-        printfl!("{} Publishing releases", style(">>").bold().blue());
-    }
-
+    // Steps that do release-phase work (e.g. github) print their own header.
     let release_ctx = step::ReleaseContext {
         repo_root,
         dry_run,

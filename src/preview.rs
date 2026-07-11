@@ -1,6 +1,9 @@
 //! Renders a Markdown "release preview" for a pull request: the next version
 //! per package and a collapsible preview of each package's release notes.
 
+use std::collections::HashSet;
+use std::fmt::Write;
+
 use crate::config::Config;
 use crate::step::changelog::generate_release_notes;
 use crate::version::PackageRelease;
@@ -10,7 +13,15 @@ pub const PREVIEW_MARKER: &str = "<!-- super-release:preview -->";
 
 /// Render the release preview as GitHub-flavored Markdown. The first line is
 /// always [`PREVIEW_MARKER`] so the comment can be located and updated in place.
-pub fn render_preview_markdown(releases: &[PackageRelease], cfg: &Config) -> String {
+///
+/// The version table lists every release; the collapsible release-notes preview
+/// is shown only for packages in `notes_packages` — those a `changelog` step
+/// would actually generate notes for, mirroring the workflow's package filtering.
+pub fn render_preview_markdown(
+    releases: &[PackageRelease],
+    notes_packages: &HashSet<String>,
+    cfg: &Config,
+) -> String {
     let mut out = String::new();
     out.push_str(PREVIEW_MARKER);
     out.push('\n');
@@ -32,22 +43,27 @@ pub fn render_preview_markdown(releases: &[PackageRelease], cfg: &Config) -> Str
             Some(reason) => format!("{} (via {})", r.bump, reason),
             None => r.bump.to_string(),
         };
-        out.push_str(&format!(
-            "| `{}` | {} | `{}` → `{}` | `{}` |\n",
+        let _ = writeln!(
+            out,
+            "| `{}` | {} | `{}` → `{}` | `{}` |",
             r.package_name, bump, r.current_version, r.next_version, tag
-        ));
+        );
     }
     out.push('\n');
 
     for r in releases {
+        if !notes_packages.contains(&r.package_name) {
+            continue;
+        }
         let notes = generate_release_notes(r)
             .unwrap_or_else(|e| format!("_Failed to render release notes: {}_", e));
-        out.push_str(&format!(
+        let _ = write!(
+            out,
             "<details>\n<summary><code>{}@{}</code> release notes</summary>\n\n{}\n\n</details>\n\n",
             r.package_name,
             r.next_version,
             notes.trim()
-        ));
+        );
     }
 
     out.push_str(
@@ -77,7 +93,7 @@ mod tests {
 
     #[test]
     fn empty_releases_render_no_release_message() {
-        let md = render_preview_markdown(&[], &Config::default());
+        let md = render_preview_markdown(&[], &HashSet::new(), &Config::default());
         assert!(md.starts_with(PREVIEW_MARKER));
         assert!(md.contains("No release will be triggered"));
     }
@@ -88,13 +104,35 @@ mod tests {
             release("root-pkg", (1, 0, 0), (1, 1, 0)),
             release("other-pkg", (2, 3, 1), (2, 3, 2)),
         ];
-        let md = render_preview_markdown(&releases, &Config::default());
+        let notes: HashSet<String> = ["root-pkg", "other-pkg"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let md = render_preview_markdown(&releases, &notes, &Config::default());
 
         assert!(md.starts_with(PREVIEW_MARKER));
         assert!(md.contains("| `root-pkg` |"));
         assert!(md.contains("| `other-pkg` |"));
         assert!(md.contains("`1.0.0` → `1.1.0`"));
-        // One collapsible block per release.
+        // One collapsible block per release in the notes set.
         assert_eq!(md.matches("<details>").count(), 2);
+    }
+
+    #[test]
+    fn notes_shown_only_for_changelog_covered_packages() {
+        let releases = vec![
+            release("root-pkg", (1, 0, 0), (1, 1, 0)),
+            release("other-pkg", (2, 3, 1), (2, 3, 2)),
+        ];
+        // Only root-pkg is covered by a changelog step.
+        let notes: HashSet<String> = std::iter::once("root-pkg".to_string()).collect();
+        let md = render_preview_markdown(&releases, &notes, &Config::default());
+
+        // Both appear in the table, but only root-pkg gets a notes block.
+        assert!(md.contains("| `root-pkg` |"));
+        assert!(md.contains("| `other-pkg` |"));
+        assert_eq!(md.matches("<details>").count(), 1);
+        assert!(md.contains("<code>root-pkg@1.1.0</code>"));
+        assert!(!md.contains("<code>other-pkg@2.3.2</code>"));
     }
 }
