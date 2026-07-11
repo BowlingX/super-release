@@ -1,15 +1,20 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::changelog::generate_release_notes;
 use super::{ReleaseContext, Step, StepConfig, StepContext, parse_options};
-use crate::github;
+use crate::commit::referenced_issues;
+use crate::forge::{self, Forge, github::GitHubForge};
 use crate::package::Package;
 use crate::version::PackageRelease;
 
+/// Marker used to find (and avoid duplicating) our "released" comments.
+const RELEASED_MARKER: &str = "<!-- super-release:released -->";
+
 /// Options for the github step.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GithubOptions {
     /// Create the release as a draft.
     #[serde(default)]
@@ -31,6 +36,41 @@ pub struct GithubOptions {
     /// GitHub Enterprise API base URL (e.g. `https://ghe.corp/api/v3`).
     #[serde(default)]
     pub github_url: Option<String>,
+
+    /// Comment on the PRs/issues a release resolves. Default: true.
+    #[serde(default = "default_true")]
+    pub comment_on_success: bool,
+
+    /// Success-comment template. Placeholders: `{releases}` (the tags), `{tag}`.
+    #[serde(default)]
+    pub success_comment: Option<String>,
+
+    /// Labels to add to resolved PRs/issues. Default: `["released"]`.
+    #[serde(default = "default_released_labels")]
+    pub released_labels: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_released_labels() -> Vec<String> {
+    vec!["released".into()]
+}
+
+impl Default for GithubOptions {
+    fn default() -> Self {
+        Self {
+            draft: false,
+            prerelease: None,
+            assets: Vec::new(),
+            release_name_template: None,
+            github_url: None,
+            comment_on_success: true,
+            success_comment: None,
+            released_labels: default_released_labels(),
+        }
+    }
 }
 
 pub struct GithubStep;
@@ -44,7 +84,7 @@ impl Step for GithubStep {
         let _opts: GithubOptions = parse_options(config)?;
         // A token is only needed when we will actually publish, i.e. when the
         // tool pushes the tags the release attaches to.
-        if !ctx.dry_run && ctx.cfg.git.push && github::token().is_none() {
+        if !ctx.dry_run && ctx.cfg.git.push && GitHubForge.token().is_none() {
             anyhow::bail!(
                 "the github step requires a GITHUB_TOKEN or GH_TOKEN environment variable"
             );
@@ -69,6 +109,12 @@ impl Step for GithubStep {
             .map(|r| build_plan(ctx, &opts, r))
             .collect::<Result<Vec<_>>>()?;
 
+        let comments = if opts.comment_on_success {
+            build_success_comments(ctx, &opts, releases)
+        } else {
+            Vec::new()
+        };
+
         if ctx.dry_run {
             for plan in &plans {
                 println!(
@@ -76,6 +122,9 @@ impl Step for GithubStep {
                     plan.tag,
                     plan.assets.len()
                 );
+            }
+            for c in &comments {
+                println!("  [github] Would comment on #{}", c.id);
             }
             return Ok(());
         }
@@ -87,15 +136,85 @@ impl Step for GithubStep {
             return Ok(());
         }
 
-        let token = github::token().context("github step requires a GITHUB_TOKEN or GH_TOKEN")?;
-        let gh_repo = github::detect_repo(ctx.repo, &ctx.cfg.git.remote)?;
-        let base_uri = opts.github_url.clone().or_else(|| gh_repo.api_base_uri());
+        let forge = GitHubForge;
+        let token = forge
+            .token()
+            .context("github step requires a GITHUB_TOKEN or GH_TOKEN")?;
+        let gh_repo = forge.detect_repo(ctx.repo, &ctx.cfg.git.remote)?;
+        let base_uri = opts
+            .github_url
+            .clone()
+            .or_else(|| forge.api_base_uri(&gh_repo));
 
-        let results = github::publish_releases(&token, base_uri.as_deref(), &gh_repo, &plans)?;
+        let results = forge.publish_releases(&token, base_uri.as_deref(), &gh_repo, &plans)?;
         for (tag, action) in results {
             println!("  [github] {} release {}", action.verb(), tag);
         }
+
+        if !comments.is_empty() {
+            let n = forge.comment_on_issues(
+                &token,
+                base_uri.as_deref(),
+                &gh_repo,
+                RELEASED_MARKER,
+                &comments,
+            )?;
+            if n > 0 {
+                println!("  [github] Commented on {} resolved issue(s)/PR(s)", n);
+            }
+        }
         Ok(())
+    }
+}
+
+/// Aggregate the issues/PRs each release resolves into one comment per number,
+/// mentioning every tag that included it (a PR may touch several packages).
+fn build_success_comments(
+    ctx: &ReleaseContext,
+    opts: &GithubOptions,
+    releases: &[PackageRelease],
+) -> Vec<forge::IssueComment> {
+    let mut id_to_tags: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for release in releases {
+        let tag = ctx.cfg.format_tag(
+            &release.package_name,
+            &release.next_version,
+            release.is_root,
+        );
+        for commit in &release.commits {
+            for id in referenced_issues(&commit.raw_message) {
+                let tags = id_to_tags.entry(id).or_default();
+                if !tags.contains(&tag) {
+                    tags.push(tag.clone());
+                }
+            }
+        }
+    }
+
+    id_to_tags
+        .into_iter()
+        .map(|(id, tags)| forge::IssueComment {
+            id,
+            body: render_success_comment(opts.success_comment.as_deref(), &tags),
+            labels: opts.released_labels.clone(),
+        })
+        .collect()
+}
+
+fn render_success_comment(template: Option<&str>, tags: &[String]) -> String {
+    let releases = tags
+        .iter()
+        .map(|t| format!("`{}`", t))
+        .collect::<Vec<_>>()
+        .join(", ");
+    match template {
+        Some(t) => t
+            .replace("{releases}", &releases)
+            .replace("{tag}", tags.first().map(String::as_str).unwrap_or("")),
+        None => format!(
+            "🎉 This is included in the following release(s): {}",
+            releases
+        ),
     }
 }
 
@@ -103,7 +222,7 @@ fn build_plan(
     ctx: &ReleaseContext,
     opts: &GithubOptions,
     release: &PackageRelease,
-) -> Result<github::ReleasePlan> {
+) -> Result<forge::ReleasePlan> {
     let tag = ctx.cfg.format_tag(
         &release.package_name,
         &release.next_version,
@@ -121,7 +240,7 @@ fn build_plan(
     let body = generate_release_notes(release)?;
     let assets = resolve_assets(ctx.repo_root, &opts.assets)?;
 
-    Ok(github::ReleasePlan {
+    Ok(forge::ReleasePlan {
         tag,
         name,
         body,
@@ -211,5 +330,28 @@ mod tests {
             .map(|p| p.file_name().unwrap().to_str().unwrap().to_string())
             .collect();
         assert_eq!(names, vec!["a.tgz", "b.tgz"]); // sorted + deduped, directories excluded
+    }
+
+    #[test]
+    fn success_comment_default_lists_releases() {
+        let body = render_success_comment(None, &["v1.1.0".into(), "core/v2.0.0".into()]);
+        assert!(body.contains("`v1.1.0`"));
+        assert!(body.contains("`core/v2.0.0`"));
+    }
+
+    #[test]
+    fn success_comment_template_substitutes() {
+        let body =
+            render_success_comment(Some("Shipped in {tag} ({releases})"), &["v1.1.0".into()]);
+        assert_eq!(body, "Shipped in v1.1.0 (`v1.1.0`)");
+    }
+
+    #[test]
+    fn options_default_enables_comments_and_released_label() {
+        // parse_options returns Default when options are absent; comments must
+        // stay on and the label present, unlike a derived Default.
+        let opts = GithubOptions::default();
+        assert!(opts.comment_on_success);
+        assert_eq!(opts.released_labels, vec!["released".to_string()]);
     }
 }

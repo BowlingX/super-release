@@ -7,6 +7,44 @@ static CONVENTIONAL_COMMIT_RE: LazyLock<Regex> = LazyLock::new(|| {
         .unwrap()
 });
 
+/// The `(#123)` pull-request suffix GitHub appends to a squash/merge subject.
+static PR_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\(#(\d+)\)\s*$").unwrap());
+
+/// A classic `Merge pull request #123 from ...` merge-commit subject.
+static MERGE_PR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^Merge pull request #(\d+)").unwrap());
+
+/// GitHub issue-closing keywords, e.g. `fixes #12`, `Closes #34`.
+static CLOSING_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)").unwrap()
+});
+
+/// Issue and PR references a commit resolves: the PR it was merged from (from
+/// the subject) plus any issues referenced with a closing keyword. Returned as
+/// strings to stay provider-neutral (numeric on git hosts, keys like `PROJ-123`
+/// on issue trackers). Deduplicated, in first-seen order. Plain `#123` mentions
+/// without a closing keyword are ignored to avoid commenting on unrelated issues.
+pub fn referenced_issues(message: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |n: &str| {
+        if !out.iter().any(|e| e == n) {
+            out.push(n.to_string());
+        }
+    };
+
+    let subject = message.lines().next().unwrap_or("");
+    if let Some(caps) = PR_SUFFIX_RE.captures(subject) {
+        push(&caps[1]);
+    }
+    if let Some(caps) = MERGE_PR_RE.captures(subject) {
+        push(&caps[1]);
+    }
+    for caps in CLOSING_RE.captures_iter(message) {
+        push(&caps[1]);
+    }
+    out
+}
+
 /// The type of version bump a commit implies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BumpLevel {
@@ -203,5 +241,38 @@ mod tests {
             c.body.as_deref(),
             Some("This is the body\nwith multiple lines")
         );
+    }
+
+    #[test]
+    fn test_referenced_issues_squash_suffix() {
+        assert_eq!(referenced_issues("feat: add thing (#123)"), vec!["123"]);
+    }
+
+    #[test]
+    fn test_referenced_issues_merge_commit() {
+        assert_eq!(
+            referenced_issues("Merge pull request #45 from foo/bar"),
+            vec!["45"]
+        );
+    }
+
+    #[test]
+    fn test_referenced_issues_closing_keywords() {
+        let msg = "fix: bug (#10)\n\nCloses #20, fixes #21\nresolved #22";
+        assert_eq!(referenced_issues(msg), vec!["10", "20", "21", "22"]);
+    }
+
+    #[test]
+    fn test_referenced_issues_ignores_plain_mentions() {
+        // `#99` is a bare mention, not a closing keyword → ignored.
+        assert_eq!(
+            referenced_issues("fix: handle #99 edge case"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn test_referenced_issues_dedupes() {
+        assert_eq!(referenced_issues("feat: x (#7)\n\nfixes #7"), vec!["7"]);
     }
 }

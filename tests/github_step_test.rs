@@ -61,6 +61,31 @@ fn dry_run_reports_would_create_release() {
 }
 
 #[test]
+fn dry_run_reports_resolved_issue_comments() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup(
+        root,
+        "branches: [main]\nsteps:\n  - name: changelog\n  - name: github\n",
+    );
+
+    // A commit that resolves a PR (#42) and closes an issue (#7).
+    fs::write(root.join("index.js"), "// v1.2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: thing (#42)\n\ncloses #7"]);
+
+    super_release_bin()
+        .current_dir(root)
+        .arg("--dry-run")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("[github] Would comment on #42"))
+        .stdout(predicate::str::contains("[github] Would comment on #7"));
+}
+
+#[test]
 fn skips_when_push_disabled() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();

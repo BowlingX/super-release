@@ -292,6 +292,20 @@
           "type": "string",
           "format": "uri",
           "description": "GitHub Enterprise API base URL, e.g. https://ghe.corp/api/v3"
+        },
+        "comment_on_success": {
+          "type": "boolean",
+          "default": true,
+          "description": "Comment on the PRs/issues a release resolves"
+        },
+        "success_comment": {
+          "type": "string",
+          "description": "Success-comment template. Placeholders: {releases} (the tags), {tag}."
+        },
+        "released_labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Labels to add to resolved PRs/issues. Default: [\"released\"]."
         }
       }
     }

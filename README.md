@@ -369,6 +369,9 @@ steps:
       # prerelease: true      # default: true on prerelease branches
       # release_name_template: '{name} v{version}'  # default: the tag
       # github_url: https://ghe.corp/api/v3         # GitHub Enterprise
+      comment_on_success: true # comment on resolved PRs/issues (default: true)
+      released_labels: ['released'] # labels added to them (default: ['released'])
+      # success_comment: '🎉 Shipped in {releases}'  # {releases} = the tags, {tag}
 ```
 
 Each step can be scoped:
@@ -389,8 +392,11 @@ Package version bumps (`package.json`) happen automatically before steps run (pa
 Steps return the files they modified. The core git step stages exactly those files for the commit -- no `git add .`.
 
 The `github` step runs **after** the commit and tags are pushed, so it needs `git.push: true` and a
-`GITHUB_TOKEN` (or `GH_TOKEN`) with `contents: write`. It creates one GitHub Release per released package
-(idempotent -- safe to re-run), using the same git-cliff notes as the changelog.
+`GITHUB_TOKEN` (or `GH_TOKEN`) with `contents: write` (and `issues: write` + `pull-requests: write` for
+comments). It creates one GitHub Release per released package (idempotent -- safe to re-run), using the same
+git-cliff notes as the changelog, and comments on the PRs/issues each release resolved (detected from `(#N)`
+squash/merge subjects and `closes/fixes #N` keywords), adding a `released` label. Comments are posted once
+(marker-guarded), so re-runs don't duplicate them.
 
 Default: `[changelog, npm]`
 

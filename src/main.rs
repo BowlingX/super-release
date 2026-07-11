@@ -1,7 +1,7 @@
 mod commit;
 mod config;
+mod forge;
 mod git;
-mod github;
 mod package;
 mod pm;
 mod preview;
@@ -54,10 +54,10 @@ struct Cli {
     #[arg(long)]
     preview: bool,
 
-    /// Pull request number for --preview (defaults to the PR detected from the
-    /// GitHub Actions environment).
+    /// Pull request number/id for --preview (defaults to the PR detected from
+    /// the CI environment).
     #[arg(long)]
-    pr: Option<u64>,
+    pr: Option<String>,
 
     /// GitHub repository as `owner/name` for --preview (defaults to the git
     /// remote or the GITHUB_REPOSITORY environment variable).
@@ -729,7 +729,8 @@ fn run_preview(
     cfg: &config::Config,
     packages: &[package::Package],
 ) -> Result<()> {
-    let pr_ctx = github::detect_pr_context();
+    let forge = forge::resolve_forge(repo, &cfg.git.remote);
+    let pr_ctx = forge.detect_pr_context();
 
     let base_branch = cli
         .base
@@ -767,40 +768,44 @@ fn run_preview(
 
     let markdown = preview::render_preview_markdown(&releases, cfg);
 
-    let pr_number = cli.pr.or_else(|| pr_ctx.as_ref().map(|c| c.number));
-    let token = github::token();
+    let pr_id = cli
+        .pr
+        .clone()
+        .or_else(|| pr_ctx.as_ref().map(|c| c.id.clone()));
+    let token = forge.token();
 
     // Comment only with both a PR and a token; otherwise print for piping.
     if !cli.no_comment
-        && let (Some(pr_number), Some(token)) = (pr_number, token)
+        && let (Some(pr_id), Some(token)) = (pr_id, token)
     {
-        let gh_repo = match &cli.repo {
+        let repo_ref = match &cli.repo {
             Some(slug) => {
                 let (owner, name) = slug
                     .split_once('/')
                     .ok_or_else(|| anyhow::anyhow!("--repo must be in 'owner/name' form"))?;
-                github::GitHubRepo {
+                forge::RepoRef {
                     owner: owner.to_string(),
                     repo: name.to_string(),
                     host: "github.com".to_string(),
                 }
             }
-            None => github::detect_repo(repo, &cfg.git.remote)?,
+            None => forge.detect_repo(repo, &cfg.git.remote)?,
         };
-        let action = github::upsert_issue_comment(
+        let api_url = forge.api_base_uri(&repo_ref);
+        let action = forge.upsert_pr_comment(
             &token,
-            gh_repo.api_base_uri().as_deref(),
-            &gh_repo,
-            pr_number,
+            api_url.as_deref(),
+            &repo_ref,
+            &pr_id,
             preview::PREVIEW_MARKER,
             &markdown,
         )?;
         eprintln!(
             "{} release preview comment on {}/{} #{}",
             action.verb(),
-            gh_repo.owner,
-            gh_repo.repo,
-            pr_number
+            repo_ref.owner,
+            repo_ref.repo,
+            pr_id
         );
     } else {
         println!("{}", markdown);
