@@ -12,14 +12,12 @@ use crate::config::{BranchContext, Config};
 pub struct TagIndex {
     /// Tags matching per package: package_name → Vec<(tag_name, version)>
     per_package: HashMap<String, Vec<(String, Version)>>,
-    /// ALL stable versions per package, regardless of branch filtering.
-    /// Used to detect version collisions on maintenance branches.
+    /// ALL stable versions per package (unfiltered), used to detect version collisions on maintenance branches.
     all_stable_versions: HashMap<String, HashSet<Version>>,
 }
 
 impl TagIndex {
-    /// Build a tag index for all packages. Enumerates tags once, resolves
-    /// reachability once, and groups by package.
+    /// Build a tag index for all packages.
     pub fn build(
         repo: &Repository,
         packages: &[(String, bool)], // (name, is_root) pairs
@@ -38,14 +36,12 @@ impl TagIndex {
             })
             .collect();
 
-        // Collect candidate tags (matching regex + branch filter) with their OIDs
         struct Candidate {
             tag_name: String,
             tag_oid: git2::Oid,
             pkg_name: String,
             version: Version,
         }
-        // First pass: find tags that match any package regex + branch filter.
         // Defer OID resolution until we know the tag is relevant.
         struct PreCandidate {
             tag_name: String,
@@ -80,7 +76,6 @@ impl TagIndex {
             }
         }
 
-        // Second pass: resolve OIDs only for matched tags.
         let mut oid_cache: HashMap<String, Option<git2::Oid>> = HashMap::new();
         for name in &matched_tag_names {
             oid_cache.insert(name.clone(), tag_to_oid(repo, name)?);
@@ -145,7 +140,6 @@ impl TagIndex {
     }
 
     /// Find the latest prerelease tag for a specific channel.
-    /// Returns `None` if there are no prerelease tags for the channel.
     pub fn latest_channel_version(
         &self,
         package_name: &str,
@@ -159,8 +153,7 @@ impl TagIndex {
             .cloned()
     }
 
-    /// Check if a specific version already exists as a stable tag for a package,
-    /// regardless of which branch it was released on.
+    /// Check if a version already exists as a stable tag, regardless of which branch it was released on.
     pub fn version_exists(&self, package_name: &str, version: &Version) -> bool {
         self.all_stable_versions
             .get(package_name)
@@ -193,13 +186,9 @@ pub fn get_commits_since(
     use std::io::BufReader;
     use std::process::{Command, Stdio};
 
-    // Each record is separated by \x1e (record separator). Within a record,
-    // the message section and the file list are separated by \x1f (unit
-    // separator) — `%n%x1f` forces a newline after `%B` and emits the
-    // sentinel regardless of whether the stored body ends with a newline.
-    // (Some authoring tools, e.g. GitHub's squash-merge API, omit the trailing
-    // newline; relying on blank-line counting silently drops `files_changed`
-    // for those commits.)
+    // `%n%x1f` emits the \x1f sentinel regardless of whether the body ends with a
+    // newline — some tools (e.g. GitHub's squash-merge API) omit it, and blank-line
+    // counting would otherwise silently drop `files_changed`.
     let mut cmd = Command::new("git");
     cmd.args([
         "log",
@@ -225,7 +214,6 @@ pub fn get_commits_since(
     );
     spinner.enable_steady_tick(std::time::Duration::from_millis(80));
 
-    // Read all output at once, then split by record separator
     let mut raw_output = String::new();
     if let Some(stdout) = child.stdout.take() {
         use std::io::Read;
@@ -241,7 +229,6 @@ pub fn get_commits_since(
             continue;
         }
 
-        // Split message section from file list on the explicit \x1f sentinel.
         let Some((msg_section, files_section)) = record.split_once('\x1f') else {
             continue;
         };
@@ -323,7 +310,6 @@ pub fn check_branch_up_to_date(
         Err(_) => return Ok(()),
     };
 
-    // Get the remote name (e.g. "origin") from the upstream ref "refs/remotes/origin/main"
     let upstream_name = upstream.get().name().unwrap_or("");
     let remote_name = upstream_name
         .strip_prefix("refs/remotes/")
@@ -366,7 +352,6 @@ pub fn check_branch_up_to_date(
         return Ok(());
     }
 
-    // Check if remote is ahead of local
     let (_, behind) = repo.graph_ahead_behind(local_oid, remote_oid)?;
     if behind > 0 {
         anyhow::bail!(

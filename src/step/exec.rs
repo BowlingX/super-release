@@ -7,13 +7,7 @@ use super::{Step, StepConfig, StepContext, parse_options, subprocess};
 use crate::package::Package;
 use crate::version::PackageRelease;
 
-/// Options for the exec step.
-///
-/// Runs arbitrary shell commands during prepare and/or publish phases.
-/// Commands support placeholders:
-/// - `{version}` — the next version (e.g. "1.2.0")
-/// - `{name}` — the package name
-/// - `{channel}` — the prerelease channel (empty for stable)
+/// Options for the exec step; commands support `{version}`, `{name}`, and `{channel}` placeholders.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ExecOptions {
     /// Command to run during the prepare phase (per package).
@@ -24,8 +18,7 @@ pub struct ExecOptions {
     #[serde(default)]
     pub publish_cmd: Option<String>,
 
-    /// Files to include in the git commit after the command runs.
-    /// Supports `{version}` and `{name}` placeholders in paths.
+    /// Files to include in the git commit; supports `{version}` and `{name}` placeholders in paths.
     #[serde(default)]
     pub files: Vec<String>,
 }

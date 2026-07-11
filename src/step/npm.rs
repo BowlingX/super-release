@@ -15,11 +15,9 @@ pub struct NpmOptions {
     #[serde(default)]
     pub access: Option<String>,
 
-    /// Registry URL (overrides default)
     #[serde(default)]
     pub registry: Option<String>,
 
-    /// Additional args passed to the publish command
     #[serde(default)]
     pub publish_args: Vec<String>,
 
@@ -35,8 +33,7 @@ pub struct NpmOptions {
     #[serde(default)]
     pub package_manager: Option<PackageManager>,
 
-    /// Check the registry before publishing to skip already-published versions.
-    /// Default: true. Set to false to skip the check and always attempt publish.
+    /// Check the registry before publishing to skip already-published versions (default: true).
     #[serde(default = "default_check_registry")]
     pub check_registry: bool,
 }
@@ -95,7 +92,6 @@ impl Step for NpmStep {
         let dry_run = ctx.dry_run;
         let mut errors: Vec<String> = Vec::new();
 
-        // Check all packages against the registry in parallel
         let to_publish: HashMap<&str, &PackageRelease> = if opts.check_registry {
             println!("  [{}] Checking registry for published versions...", pm);
 
@@ -165,7 +161,6 @@ impl Step for NpmStep {
             return Ok(Vec::new());
         }
 
-        // Show publish order
         let publish_levels = dependency_levels(&order, packages, &to_publish);
         if publish_levels.len() > 1 || publish_levels.first().map(|l| l.len() > 1).unwrap_or(false)
         {
@@ -276,7 +271,6 @@ fn publish_one(
     )
 }
 
-/// Format the npm view command for display.
 fn format_view_command(name: &str, version: &str, registry: Option<&str>) -> String {
     let mut cmd = std::process::Command::new("npm");
     cmd.args(["view", &format!("{}@{}", name, version), "version"]);
@@ -287,7 +281,6 @@ fn format_view_command(name: &str, version: &str, registry: Option<&str>) -> Str
 }
 
 enum VersionCheckResult {
-    /// Version exists on the registry.
     Published(String),
     /// 404: version not found (safe to publish).
     NotFound(String),

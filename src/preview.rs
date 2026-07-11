@@ -5,18 +5,13 @@ use std::collections::HashSet;
 use std::fmt::Write;
 
 use crate::config::Config;
-use crate::step::changelog::generate_release_notes;
+use crate::notes::generate_release_notes;
 use crate::version::PackageRelease;
 
 /// Stable HTML marker used to find and update the sticky preview comment.
 pub const PREVIEW_MARKER: &str = "<!-- super-release:preview -->";
 
-/// Render the release preview as GitHub-flavored Markdown. The first line is
-/// always [`PREVIEW_MARKER`] so the comment can be located and updated in place.
-///
-/// The version table lists every release; the collapsible release-notes preview
-/// is shown only for packages in `notes_packages` — those a `changelog` step
-/// would actually generate notes for, mirroring the workflow's package filtering.
+/// Render the release preview as Markdown; the first line is always [`PREVIEW_MARKER`] so the comment can be updated in place, and notes appear only for packages in `notes_packages`.
 pub fn render_preview_markdown(
     releases: &[PackageRelease],
     notes_packages: &HashSet<String>,
@@ -115,7 +110,6 @@ mod tests {
         assert!(md.contains("| `root-pkg` |"));
         assert!(md.contains("| `other-pkg` |"));
         assert!(md.contains("`1.0.0` → `1.1.0`"));
-        // One collapsible block per release in the notes set.
         assert_eq!(md.matches("<details>").count(), 2);
     }
 
@@ -125,11 +119,9 @@ mod tests {
             release("root-pkg", (1, 0, 0), (1, 1, 0)),
             release("other-pkg", (2, 3, 1), (2, 3, 2)),
         ];
-        // Only root-pkg is covered by a changelog step.
         let notes: HashSet<String> = std::iter::once("root-pkg".to_string()).collect();
         let md = render_preview_markdown(&releases, &notes, None, &Config::default());
 
-        // Both appear in the table, but only root-pkg gets a notes block.
         assert!(md.contains("| `root-pkg` |"));
         assert!(md.contains("| `other-pkg` |"));
         assert_eq!(md.matches("<details>").count(), 1);

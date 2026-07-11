@@ -19,9 +19,7 @@ pub struct StepContext<'a> {
     pub cfg: &'a crate::config::Config,
 }
 
-/// Context passed to the `release` phase, which runs *after* the git commit and
-/// tags are pushed. Carries the config (for tag formatting) and the repository
-/// (for remote/owner-repo resolution) that publishing to GitHub needs.
+/// Context passed to the `release` phase, which runs after the git commit and tags are pushed.
 pub struct ReleaseContext<'a> {
     pub repo_root: &'a std::path::Path,
     pub dry_run: bool,
@@ -30,9 +28,7 @@ pub struct ReleaseContext<'a> {
     pub repo: &'a git2::Repository,
 }
 
-/// Trait that all release steps must implement.
-/// Steps return the list of files they modified so the core
-/// can stage exactly those files for the git commit.
+/// Steps return the list of files they modified so the core can stage exactly those files.
 pub trait Step: Send + Sync {
     fn name(&self) -> &str;
 
@@ -62,8 +58,7 @@ pub trait Step: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Runs after the git commit and tags are pushed — the place for publishing
-    /// to external services that reference the pushed tag (e.g. GitHub Releases).
+    /// Runs after the git commit and tags are pushed, for publishing to external services that reference the pushed tag.
     fn release(
         &self,
         _ctx: &ReleaseContext,
@@ -74,14 +69,12 @@ pub trait Step: Send + Sync {
         Ok(())
     }
 
-    /// Whether this step does work in the release phase — drives the
-    /// "Publishing releases" header. Steps that implement `release` return true.
+    /// Whether this step does work in the release phase; drives the "Publishing releases" header.
     fn has_release_phase(&self) -> bool {
         false
     }
 }
 
-/// Create a step instance by name.
 pub fn create_step(name: &str) -> Option<Box<dyn Step>> {
     match name {
         "changelog" => Some(Box::new(changelog::ChangelogStep)),
@@ -92,7 +85,6 @@ pub fn create_step(name: &str) -> Option<Box<dyn Step>> {
     }
 }
 
-/// Helper to deserialize step options from the JSON value.
 pub fn parse_options<T: serde::de::DeserializeOwned + Default>(config: &StepConfig) -> Result<T> {
     if config.options.is_null() {
         return Ok(T::default());
@@ -101,9 +93,7 @@ pub fn parse_options<T: serde::de::DeserializeOwned + Default>(config: &StepConf
         .map_err(|e| anyhow::anyhow!("Invalid options for step '{}': {}", config.name, e))
 }
 
-/// Resolve a step's custom Tera body template: the contents of `template_file`
-/// (read relative to the repo root) take precedence over the inline `template`.
-/// Returns `None` when neither is set — the step uses its default template.
+/// Resolve a step's custom Tera body template: `template_file` (read relative to repo root) takes precedence over inline `template`, and `None` means the step uses its default.
 pub fn resolve_template(
     repo_root: &std::path::Path,
     template: Option<&str>,

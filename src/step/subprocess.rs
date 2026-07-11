@@ -9,7 +9,6 @@ use std::time::Duration;
 /// Shared MultiProgress for coordinating concurrent spinners.
 static MULTI: LazyLock<MultiProgress> = LazyLock::new(MultiProgress::new);
 
-/// Format a Command for display (program + args).
 pub fn format_command(cmd: &Command) -> String {
     let prog = cmd.get_program().to_string_lossy().to_string();
     let args: Vec<String> = cmd
@@ -30,16 +29,12 @@ pub fn format_command(cmd: &Command) -> String {
     }
 }
 
-/// Options for `run_command`.
 pub struct RunOptions<'a> {
     pub label: &'a str,
     pub step_name: &'a str,
 }
 
-/// Run a command with live output streaming:
-/// - TTY: per-task spinner via MultiProgress (safe for concurrent use)
-/// - CI (no TTY): all lines printed as they arrive with step prefix
-/// - On error: last 20 lines for debugging (TTY only)
+/// Run a command, streaming output live: a per-task spinner on TTY, prefixed lines in CI, and the last 20 lines on error.
 pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 

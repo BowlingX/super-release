@@ -7,32 +7,24 @@ use std::path::{Path, PathBuf};
 /// Ecosystem-agnostic — populated by a [`crate::resolver::PackageResolver`].
 #[derive(Debug, Clone)]
 pub struct Package {
-    /// Package name (e.g. "@acme/core", "my-lib")
     pub name: String,
-    /// Current version
     pub version: Version,
     /// Path to the package directory (relative to repo root)
     pub path: PathBuf,
     /// Path to the manifest file (relative to repo root)
     pub manifest_path: PathBuf,
-    /// Whether this is the root package (manifest at repo root)
     pub is_root: bool,
     /// Dependencies on other packages in this repo (name -> version requirement)
     pub local_dependencies: HashMap<String, String>,
-    /// All dependencies (for reference)
     pub dependencies: HashMap<String, String>,
-    /// All devDependencies (for reference)
     pub dev_dependencies: HashMap<String, String>,
-    /// All optional dependencies (for reference)
     pub optional_dependencies: HashMap<String, String>,
-    /// Warning about the package manifest (e.g. missing name or version), shown after filtering
+    /// Warning about the package manifest, shown after filtering
     pub warning: Option<String>,
-    /// Whether this package was skipped during discovery (e.g. missing name)
     pub skipped: bool,
 }
 
-/// Build a topological ordering of packages based on local dependencies.
-/// Returns packages in order such that dependencies come before dependents.
+/// Returns packages ordered such that dependencies come before dependents.
 pub fn topological_sort(packages: &[Package]) -> Result<Vec<String>> {
     let name_set: HashMap<&str, usize> = packages
         .iter()
@@ -73,10 +65,7 @@ pub fn topological_sort(packages: &[Package]) -> Result<Vec<String>> {
     Ok(order)
 }
 
-/// Determine which package a file belongs to.
-/// Returns the most specific (longest path) matching package.
-///
-/// For best performance, pass packages pre-sorted by `sort_by_path_depth`.
+/// Determine which package a file belongs to (most specific match wins).
 /// Expects packages sorted by `sort_by_path_depth` (deepest first).
 pub fn file_to_package<'a>(file_path: &str, packages: &'a [Package]) -> Option<&'a Package> {
     debug_assert!(
@@ -95,7 +84,6 @@ pub fn file_to_package<'a>(file_path: &str, packages: &'a [Package]) -> Option<&
         }
     }
 
-    // Fall back to root package (empty path)
     packages.iter().find(|pkg| pkg.path.as_os_str().is_empty())
 }
 
@@ -172,21 +160,18 @@ mod tests {
         ];
         sort_by_path_depth(&mut packages);
 
-        // Deepest match wins
         assert_eq!(
             file_to_package("packages/core/sub/index.ts", &packages)
                 .unwrap()
                 .name,
             "@myorg/core-sub"
         );
-        // Parent package still works for its own files
         assert_eq!(
             file_to_package("packages/core/index.ts", &packages)
                 .unwrap()
                 .name,
             "@myorg/core"
         );
-        // Root fallback
         assert_eq!(
             file_to_package("tsconfig.json", &packages).unwrap().name,
             "root"

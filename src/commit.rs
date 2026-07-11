@@ -19,11 +19,7 @@ static CLOSING_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)\s+#(\d+)").unwrap()
 });
 
-/// Issue and PR references a commit resolves: the PR it was merged from (from
-/// the subject) plus any issues referenced with a closing keyword. Returned as
-/// strings to stay provider-neutral (numeric on git hosts, keys like `PROJ-123`
-/// on issue trackers). Deduplicated, in first-seen order. Plain `#123` mentions
-/// without a closing keyword are ignored to avoid commenting on unrelated issues.
+/// Deduplicated PR/issue references a commit resolves; plain `#123` mentions without a closing keyword are ignored to avoid commenting on unrelated issues.
 pub fn referenced_issues(message: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut push = |n: &str| {
@@ -84,10 +80,7 @@ pub struct ConventionalCommit {
     pub files_changed: Vec<String>,
 }
 
-/// Parse a conventional commit message into its components.
-/// Format: <type>(<scope>)!: <description>
-///
-/// The `hash` and `files_changed` are set by the caller after parsing.
+/// Parse `<type>(<scope>)!: <description>`; `hash` and `files_changed` are set by the caller after parsing.
 pub fn parse_conventional_commit(hash: &str, message: &str) -> Option<ConventionalCommit> {
     let first_line = message.lines().next()?;
     let caps = CONVENTIONAL_COMMIT_RE.captures(first_line)?;

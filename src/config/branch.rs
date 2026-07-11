@@ -3,12 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::glob_match;
 
-/// Configuration for a release branch.
-///
-/// Branches can be:
-/// - **Stable** (default): `main`, `master` — produces normal releases
-/// - **Prerelease**: `beta`, `next`, `alpha` — produces e.g. `2.0.0-beta.1`
-/// - **Maintenance**: `1.x`, `2.x` — produces patch/minor releases for old majors
+/// Configuration for a release branch (stable, prerelease, or maintenance).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum BranchConfig {
@@ -20,28 +15,22 @@ pub enum BranchConfig {
 pub struct BranchDef {
     pub name: String,
 
-    /// - `true`: use the branch name as the channel
-    /// - `"beta"`: use a fixed channel name
-    /// - absent/false: stable releases
+    /// `true` uses the branch name as channel, a string sets a fixed channel, absent/false is stable.
     #[serde(default)]
     pub prerelease: PrereleaseSetting,
 
     #[serde(default)]
     pub maintenance: bool,
 
-    /// Version range for maintenance branches (e.g. `"1.x"`, `"1.5.x"`).
-    /// If omitted, inferred from the branch name.
+    /// Maintenance version range; if omitted, inferred from the branch name.
     #[serde(default)]
     pub range: Option<String>,
 
-    /// Distribution channel (npm dist-tag). Controls which dist-tag is used
-    /// when publishing. Defaults to prerelease name for prerelease branches,
-    /// branch name for maintenance branches, unset for the primary release branch.
+    /// npm dist-tag; defaults to prerelease name (prerelease), branch name (maintenance), or unset.
     #[serde(default)]
     pub channel: Option<String>,
 
-    /// Glob patterns to include. Only matching packages are released on this branch.
-    /// If empty, all packages are released.
+    /// Glob patterns of packages to include; empty releases all packages.
     #[serde(default)]
     pub packages: Vec<String>,
 }
@@ -114,15 +103,13 @@ impl BranchConfig {
 /// Describes what a maintenance branch locks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MaintenanceRange {
-    /// e.g. `1.x` — major is locked, minor bumps are allowed.
+    /// `1.x` — major locked, minor bumps allowed.
     Major(u64),
-    /// e.g. `1.5.x` — major and minor are locked, only patch bumps.
+    /// `1.5.x` — major and minor locked, only patch bumps.
     MajorMinor(u64, u64),
 }
 
-/// Parse a maintenance branch name like `1.x` or `1.5.x` into a range.
-/// Returns `None` if the pattern can't be parsed — falls back to capping
-/// only major bumps (legacy behavior).
+/// Parse a maintenance branch name like `1.x` or `1.5.x`; `None` when unparseable (caller falls back to capping only major bumps).
 fn parse_maintenance_range(branch_name: &str) -> Option<MaintenanceRange> {
     let parts: Vec<&str> = branch_name.split('.').collect();
     match parts.as_slice() {
@@ -142,16 +129,14 @@ pub struct BranchContext {
     pub branch_name: String,
     pub prerelease: Option<String>,
     pub maintenance: bool,
-    /// Parsed maintenance range from the branch name (e.g. `1.x` → `Major(1)`).
     pub maintenance_range: Option<MaintenanceRange>,
-    /// Distribution channel (npm dist-tag). None = default (`latest`).
+    /// npm dist-tag; None means the default (`latest`).
     pub channel: Option<String>,
-    /// Package include filter from branch config. Empty = all packages.
+    /// Package include filter; empty means all packages.
     pub packages: Vec<String>,
 }
 
-/// Detect the current branch and resolve it against the branch config.
-/// Returns `None` if the current branch is not configured for releases.
+/// Resolve the current HEAD against the branch config; `None` if the branch is not configured for releases.
 pub fn resolve_branch_context(
     repo: &git2::Repository,
     branches: &[BranchConfig],
@@ -161,9 +146,7 @@ pub fn resolve_branch_context(
     resolve_named_branch_context(branches, &branch_name)
 }
 
-/// Resolve a specific branch name against the branch config, independent of the
-/// checked-out branch (preview mode uses this for a PR's base branch). Returns
-/// `None` if the branch is not configured for releases.
+/// Resolve a branch name independent of the checked-out branch (preview mode uses this for a PR's base branch).
 pub fn resolve_named_branch_context(
     branches: &[BranchConfig],
     branch_name: &str,
@@ -172,7 +155,6 @@ pub fn resolve_named_branch_context(
         if glob_match(bc.name(), branch_name) {
             let maintenance = bc.is_maintenance();
             let maintenance_range = if maintenance {
-                // Prefer explicit `range` config, fall back to branch name.
                 let range_source = bc.range().unwrap_or(branch_name);
                 match parse_maintenance_range(range_source) {
                     Some(r) => Some(r),
