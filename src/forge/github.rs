@@ -117,10 +117,17 @@ impl Forge for GitHubForge {
         })
     }
 
-    /// Idempotency uses "get release by tag", which GitHub only returns for
-    /// *published* releases — so re-running with `draft: true` won't find the
-    /// prior draft and will fail to re-create it. Non-draft releases re-run
-    /// cleanly.
+    /// A new release with assets is created as a *draft*, its assets are
+    /// uploaded, and it is then published. This makes the first publish atomic
+    /// (assets are attached before the release goes public) and supports
+    /// repositories with immutable releases, where a published release is locked
+    /// and rejects asset uploads. An already-published *immutable* release is
+    /// left untouched (it can't be modified).
+    ///
+    /// Idempotent: `get release by tag` only returns *published* releases, so a
+    /// re-run also scans recent releases to recover an orphaned draft (one a
+    /// prior run created but crashed before publishing) rather than creating a
+    /// duplicate. Published releases re-run cleanly.
     fn publish_releases(
         &self,
         token: &str,
@@ -135,9 +142,12 @@ impl Forge for GitHubForge {
             let mut results = Vec::with_capacity(plans.len());
 
             for plan in plans {
-                let (release, action) = match releases.get_by_tag(&plan.tag).await {
+                let action = match releases.get_by_tag(&plan.tag).await {
+                    // An immutable release is locked — it already exists with the
+                    // assets from the run that created it; leave it as-is.
+                    Ok(existing) if existing.immutable == Some(true) => UpsertAction::Skipped,
                     Ok(existing) => {
-                        let updated = releases
+                        let release = releases
                             .update(existing.id.0)
                             .name(plan.name.as_str())
                             .body(plan.body.as_str())
@@ -145,20 +155,43 @@ impl Forge for GitHubForge {
                             .prerelease(plan.prerelease)
                             .send()
                             .await?;
-                        (updated, UpsertAction::Updated)
+                        upload_assets(&client, repo, &release, &plan.assets).await?;
+                        UpsertAction::Updated
                     }
                     Err(octocrab::Error::GitHub { source, .. })
                         if source.status_code.as_u16() == 404 =>
                     {
-                        let created = releases
-                            .create(plan.tag.as_str())
-                            .name(plan.name.as_str())
-                            .body(plan.body.as_str())
-                            .draft(plan.draft)
-                            .prerelease(plan.prerelease)
-                            .send()
-                            .await?;
-                        (created, UpsertAction::Created)
+                        // Create as a draft when there are assets to attach:
+                        // immutable published releases reject uploads, so upload
+                        // to the draft first, then publish.
+                        let create_as_draft = plan.draft || !plan.assets.is_empty();
+                        // `get_by_tag` doesn't see drafts, so a prior run that
+                        // created a draft but crashed before publishing is
+                        // invisible here — recover that draft instead of creating
+                        // a duplicate.
+                        let existing_draft = if create_as_draft {
+                            find_draft_release(&client, repo, &plan.tag).await?
+                        } else {
+                            None
+                        };
+                        let release = match existing_draft {
+                            Some(draft) => draft,
+                            None => {
+                                releases
+                                    .create(plan.tag.as_str())
+                                    .name(plan.name.as_str())
+                                    .body(plan.body.as_str())
+                                    .draft(create_as_draft)
+                                    .prerelease(plan.prerelease)
+                                    .send()
+                                    .await?
+                            }
+                        };
+                        upload_assets(&client, repo, &release, &plan.assets).await?;
+                        if create_as_draft && !plan.draft {
+                            releases.update(release.id.0).draft(false).send().await?;
+                        }
+                        UpsertAction::Created
                     }
                     Err(e) => {
                         return Err(anyhow::anyhow!(
@@ -168,25 +201,6 @@ impl Forge for GitHubForge {
                         ));
                     }
                 };
-
-                for path in &plan.assets {
-                    let name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .ok_or_else(|| anyhow::anyhow!("invalid asset path: {}", path.display()))?;
-                    // Replace a same-named asset from a previous run so re-runs
-                    // are idempotent.
-                    if let Some(existing) = release.assets.iter().find(|a| a.name == name) {
-                        repos.release_assets().delete(existing.id.0).await?;
-                    }
-                    let data = std::fs::read(path)
-                        .map_err(|e| anyhow::anyhow!("reading asset {}: {}", path.display(), e))?;
-                    releases
-                        .upload_asset(release.id.0, name, bytes::Bytes::from(data))
-                        .send()
-                        .await?;
-                }
-
                 results.push((plan.tag.clone(), action));
             }
 
@@ -254,6 +268,60 @@ impl Forge for GitHubForge {
 fn numeric_id(id: &str) -> Result<u64> {
     id.parse::<u64>()
         .map_err(|_| anyhow::anyhow!("GitHub issue/PR id must be numeric, got '{}'", id))
+}
+
+/// Find an orphaned draft release for `tag` — one a prior run created but
+/// crashed before publishing. `get_by_tag` only returns published releases, so
+/// we scan the most recent releases (a just-created draft sorts near the top);
+/// if it isn't in the first page we fall back to creating a new draft.
+async fn find_draft_release(
+    client: &Octocrab,
+    repo: &RepoRef,
+    tag: &str,
+) -> Result<Option<octocrab::models::repos::Release>> {
+    let page = client
+        .repos(&repo.owner, &repo.repo)
+        .releases()
+        .list()
+        .per_page(100)
+        .send()
+        .await?;
+    Ok(page
+        .items
+        .into_iter()
+        .find(|r| r.draft && r.tag_name == tag))
+}
+
+/// Upload each asset to a release, replacing any existing same-named asset so
+/// re-runs are idempotent. The release must be mutable (a draft, or a published
+/// release on a repo without immutable releases).
+async fn upload_assets(
+    client: &Octocrab,
+    repo: &RepoRef,
+    release: &octocrab::models::repos::Release,
+    assets: &[std::path::PathBuf],
+) -> Result<()> {
+    if assets.is_empty() {
+        return Ok(());
+    }
+    let repos = client.repos(&repo.owner, &repo.repo);
+    let releases = repos.releases();
+    for path in assets {
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow::anyhow!("invalid asset path: {}", path.display()))?;
+        if let Some(existing) = release.assets.iter().find(|a| a.name == name) {
+            repos.release_assets().delete(existing.id.0).await?;
+        }
+        let data = std::fs::read(path)
+            .map_err(|e| anyhow::anyhow!("reading asset {}: {}", path.display(), e))?;
+        releases
+            .upload_asset(release.id.0, name, bytes::Bytes::from(data))
+            .send()
+            .await?;
+    }
+    Ok(())
 }
 
 /// Fetch all comments on an issue/PR (following pagination).

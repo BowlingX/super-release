@@ -26,11 +26,13 @@ pub struct PrContext {
     pub base_ref: Option<String>,
 }
 
-/// Whether an upsert created a new resource or updated an existing one.
+/// The outcome of an upsert: a new resource created, an existing one updated, or
+/// left untouched because it was already in the desired (or an unmodifiable) state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpsertAction {
     Created,
     Updated,
+    Skipped,
 }
 
 impl UpsertAction {
@@ -38,6 +40,7 @@ impl UpsertAction {
         match self {
             UpsertAction::Created => "Created",
             UpsertAction::Updated => "Updated",
+            UpsertAction::Skipped => "Skipped",
         }
     }
 }
