@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: write
   id-token: write
+  # For the github step's "released" comments and labels on resolved PRs/issues.
+  issues: write
+  pull-requests: write
 
 jobs:
   release:
@@ -53,31 +56,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           ./artifacts/super-release
-
-      - name: Push release commit and tags
-        run: |
-          TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
-          if [ -z "$TAG" ]; then
-            echo "No new release, nothing to push"
-            exit 0
-          fi
-          git push origin HEAD --follow-tags
-
-      - name: Create GitHub Release
-        run: |
-          TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
-          if [ -z "$TAG" ]; then
-            exit 0
-          fi
-
-          mkdir -p release-assets
-          find artifacts -name '*.tar.gz' -exec cp {} release-assets/ \;
-          find artifacts -name '*.zip' -exec cp {} release-assets/ \;
-          find artifacts -name '*.sha256' -exec cp {} release-assets/ \;
-
-          gh release create "$TAG" \
-            --title "$TAG" \
-            --generate-notes \
-            release-assets/*
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -415,11 +415,11 @@ fn calculate_stable_version(current: &Version, commits: &[ConventionalCommit]) -
         ..Default::default()
     };
 
-    let next_str = cliff_release
+    let next = cliff_release
         .calculate_next_version()
         .map_err(|e| anyhow::anyhow!("Failed to calculate next version: {}", e))?;
 
-    Version::parse(&next_str).or_else(|_| Ok(apply_bump_fallback(current, commits)))
+    Version::parse(&next.version).or_else(|_| Ok(apply_bump_fallback(current, commits)))
 }
 
 fn calculate_prerelease_version(

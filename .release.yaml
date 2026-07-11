@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/BowlingX/super-release/refs/tags/super-release/v1.3.0/schema.json
+# yaml-language-server: $schema=./schema.json
 # super-release releases itself
 
 branches:
@@ -38,7 +38,15 @@ steps:
       files:
         - Cargo.toml
         - Cargo.lock
+  - name: github
+    packages:
+      - 'super-release'
+    options:
+      assets:
+        - 'artifacts/**/*.tar.gz'
+        - 'artifacts/**/*.zip'
+        - 'artifacts/**/*.sha256'
 
 git:
   commit_message: 'chore(release): {releases} [skip ci]'
-  push: false
+  push: true

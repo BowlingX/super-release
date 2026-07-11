@@ -120,7 +120,7 @@
       "properties": {
         "name": {
           "type": "string",
-          "enum": ["changelog", "npm", "exec"],
+          "enum": ["changelog", "npm", "exec", "github"],
           "description": "Step name"
         },
         "packages": {
@@ -154,6 +154,12 @@
           "if": { "properties": { "name": { "const": "exec" } } },
           "then": {
             "properties": { "options": { "$ref": "#/$defs/execOptions" } }
+          }
+        },
+        {
+          "if": { "properties": { "name": { "const": "github" } } },
+          "then": {
+            "properties": { "options": { "$ref": "#/$defs/githubOptions" } }
           }
         }
       ]
@@ -257,6 +263,49 @@
           "items": { "type": "string" },
           "description": "Files to include in the git commit. Supports {version} and {name} placeholders.",
           "examples": [["Cargo.toml", "Cargo.lock"]]
+        }
+      }
+    },
+    "githubOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "draft": {
+          "type": "boolean",
+          "default": false,
+          "description": "Create the GitHub Release as a draft"
+        },
+        "prerelease": {
+          "type": "boolean",
+          "description": "Force the prerelease flag. Default: true on prerelease branches, false otherwise."
+        },
+        "assets": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Glob patterns (relative to the repo root) for files to attach to the release."
+        },
+        "release_name_template": {
+          "type": "string",
+          "description": "Release name template. Placeholders: {name}, {version}, {tag}. Default: the tag."
+        },
+        "github_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "GitHub Enterprise API base URL, e.g. https://ghe.corp/api/v3"
+        },
+        "comment_on_success": {
+          "type": "boolean",
+          "default": true,
+          "description": "Comment on the PRs/issues a release resolves"
+        },
+        "success_comment": {
+          "type": "string",
+          "description": "Success-comment template. Placeholders: {releases} (the tags), {tag}."
+        },
+        "released_labels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Labels to add to resolved PRs/issues. Default: [\"released\"]."
         }
       }
     }

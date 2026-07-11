@@ -70,6 +70,11 @@ Options:
   -C, --path <PATH>            Repository root [default: .]
   -c, --config <CONFIG>        Path to config file [default: .release.yaml]
       --show-next-version      Print the next version and exit
+      --preview                Render a pull-request release preview and exit
+      --pr <PR>                Pull request number for --preview (auto-detected in CI)
+      --repo <OWNER/NAME>      GitHub repository for --preview (auto-detected)
+      --base <BRANCH>          Base branch to evaluate --preview against
+      --no-comment             With --preview, print Markdown instead of commenting
   -p, --package <PACKAGE>      Filter to a specific package (for --show-next-version)
   -v, --verbose                Verbose output
       --dangerously-skip-config-check
@@ -88,6 +93,26 @@ SUPER_RELEASE_VERSION=$VERSION cargo build --release
 ```
 
 In monorepos, use `--package` to select which package: `super-release --show-next-version -p @acme/core`
+
+### `--preview`
+
+Renders a **release preview** for a pull request: the next version for each package plus a preview of the release
+notes, without changing anything. When a GitHub token and a pull request are detected (as in GitHub Actions), it posts —
+and on later runs updates in place — a single "sticky" comment on the PR. Otherwise it prints the Markdown to stdout so
+you can pipe it into your own comment step.
+
+```bash
+# In CI (GitHub Actions): auto-detects the PR, repo, base branch, and token
+super-release --preview
+
+# Locally / other CI: print the Markdown
+super-release --preview --base main --no-comment
+```
+
+The preview evaluates the PR against its **base** branch and reflects the commits currently on the branch, so the final
+release may differ after a squash-merge. Requires `pull-requests: write` permission and a full checkout
+(`fetch-depth: 0`). A ready-to-use workflow lives in
+[`.github/workflows/pr-preview.yml`](.github/workflows/pr-preview.yml).
 
 ## How It Works
 
@@ -336,6 +361,17 @@ steps:
       prepare_cmd: 'sed -i'''' -e ''s/^version = .*/version = "{version}"/'' Cargo.toml'
       publish_cmd: 'cargo publish'
       files: [Cargo.toml, Cargo.lock] # include in git commit
+
+  - name: github
+    options:
+      assets: ['dist/*.tgz'] # glob(s), relative to repo root
+      draft: false
+      # prerelease: true      # default: true on prerelease branches
+      # release_name_template: '{name} v{version}'  # default: the tag
+      # github_url: https://ghe.corp/api/v3         # GitHub Enterprise
+      comment_on_success: true # comment on resolved PRs/issues (default: true)
+      released_labels: ['released'] # labels added to them (default: ['released'])
+      # success_comment: '🎉 Shipped in {releases}'  # {releases} = the tags, {tag}
 ```
 
 Each step can be scoped:
@@ -345,14 +381,26 @@ Each step can be scoped:
 - **`branches`** -- glob patterns for branch names this step runs on. If empty, the step runs on all branches.
   For example, `branches: ["main"]` ensures a step only runs on the main branch.
 
-| Step        | Prepare                                            | Publish                                                |
-| ----------- | -------------------------------------------------- | ------------------------------------------------------ |
-| `changelog` | Generates/updates changelog per package (parallel) | --                                                     |
-| `npm`       | --                                                 | Publishes packages (parallel within dependency levels) |
-| `exec`      | Runs custom shell command per package              | Runs custom shell command per package                  |
+| Step        | Prepare/Publish                                        | Release (after tags are pushed)                          |
+| ----------- | ------------------------------------------------------ | -------------------------------------------------------- |
+| `changelog` | Generates/updates changelog per package (parallel)     | --                                                       |
+| `npm`       | Publishes packages (parallel within dependency levels) | --                                                       |
+| `exec`      | Runs custom shell command per package                  | --                                                       |
+| `github`    | --                                                     | Creates a GitHub Release per package with its notes + assets |
 
 Package version bumps (`package.json`) happen automatically before steps run (part of core).
 Steps return the files they modified. The core git step stages exactly those files for the commit -- no `git add .`.
+
+The `github` step runs **after** the commit and tags are pushed, so it needs `git.push: true` and a
+`GITHUB_TOKEN` (or `GH_TOKEN`) with `contents: write` (and `issues: write` + `pull-requests: write` for
+comments). It creates one GitHub Release per released package (idempotent -- safe to re-run) and comments on the
+PRs/issues each release resolved (detected from `(#N)` squash/merge subjects and `closes/fixes #N` keywords),
+adding a `released` label. Comments are posted once (marker-guarded), so re-runs don't duplicate them.
+
+Release bodies are enriched with GitHub data when a token is available -- a "What's Changed" list with `@author`
+mentions and PR links, plus a "New Contributors" section -- via git-cliff's GitHub integration (the API calls are
+cached on disk, and fall back to the plain git-cliff notes if the fetch fails). The `CHANGELOG.md` file keeps its
+conventional grouped format.
 
 Default: `[changelog, npm]`
 

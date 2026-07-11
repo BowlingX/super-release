@@ -1,7 +1,7 @@
 mod branch;
 pub mod schema;
 
-pub use branch::{BranchConfig, BranchContext, MaintenanceRange};
+pub use branch::{BranchConfig, BranchContext, MaintenanceRange, resolve_named_branch_context};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

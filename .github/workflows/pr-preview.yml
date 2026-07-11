@@ -1,0 +1,36 @@
+name: PR Release Preview
+
+# Posts (and keeps updated) a sticky comment on each pull request showing the
+# next version per package and a preview of the release notes.
+
+on:
+  pull_request:
+
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview:
+    name: Release preview
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Full history + tags are required to compute version bumps.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build super-release
+        run: cargo build --release
+
+      - name: Post release preview
+        run: ./target/release/super-release --preview
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

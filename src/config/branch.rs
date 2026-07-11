@@ -158,13 +158,22 @@ pub fn resolve_branch_context(
 ) -> Result<Option<BranchContext>> {
     let head = repo.head().context("Failed to get HEAD")?;
     let branch_name = head.shorthand().unwrap_or("HEAD").to_string();
+    resolve_named_branch_context(branches, &branch_name)
+}
 
+/// Resolve a specific branch name against the branch config, independent of the
+/// checked-out branch (preview mode uses this for a PR's base branch). Returns
+/// `None` if the branch is not configured for releases.
+pub fn resolve_named_branch_context(
+    branches: &[BranchConfig],
+    branch_name: &str,
+) -> Result<Option<BranchContext>> {
     for bc in branches {
-        if glob_match(bc.name(), &branch_name) {
+        if glob_match(bc.name(), branch_name) {
             let maintenance = bc.is_maintenance();
             let maintenance_range = if maintenance {
                 // Prefer explicit `range` config, fall back to branch name.
-                let range_source = bc.range().unwrap_or(&branch_name);
+                let range_source = bc.range().unwrap_or(branch_name);
                 match parse_maintenance_range(range_source) {
                     Some(r) => Some(r),
                     None => anyhow::bail!(
@@ -177,11 +186,11 @@ pub fn resolve_branch_context(
             } else {
                 None
             };
-            let prerelease = bc.resolve_prerelease(&branch_name);
-            let channel = bc.resolve_channel(&branch_name).or(prerelease.clone());
+            let prerelease = bc.resolve_prerelease(branch_name);
+            let channel = bc.resolve_channel(branch_name).or(prerelease.clone());
             return Ok(Some(BranchContext {
                 prerelease,
-                branch_name: branch_name.clone(),
+                branch_name: branch_name.to_string(),
                 maintenance,
                 maintenance_range,
                 channel,
