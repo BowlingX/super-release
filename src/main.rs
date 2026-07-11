@@ -609,16 +609,14 @@ fn finalize_git(
         // A concurrent release may already have pushed some of these tags
         // (e.g. the local checkout didn't fetch them); the remote rejects
         // re-pushing an existing tag, which would fail the entire push.
-        let on_remote = match git::remote_existing_tags(repo_root, &cfg.git.remote, &created_tags) {
-            Ok(tags) => tags,
-            Err(e) => {
+        let on_remote = git::remote_existing_tags(repo_root, &cfg.git.remote, &created_tags)
+            .unwrap_or_else(|e| {
                 printfl!(
                     "  [git] Warning: could not check remote tags ({}), pushing all",
                     e
                 );
                 Default::default()
-            }
-        };
+            });
         created_tags.retain(|tag| {
             let Some(remote_oid) = on_remote.get(tag) else {
                 return true;
