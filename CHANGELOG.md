@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.10.0] - 2026-07-11
+
+### 🚀 Features
+
+- Added release template customization, adjustments, refactoring & cleanup (#30)
 ## [1.9.0] - 2026-07-11
 
 ### 🚀 Features
