@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.8.0] - 2026-07-11
+
+### 🚀 Features
+
+- Setup github step, fixes #2 (#28)
 ## [1.7.1] - 2026-07-11
 
 ### 🐛 Bug Fixes
