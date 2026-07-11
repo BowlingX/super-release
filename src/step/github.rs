@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use console::style;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -49,6 +48,16 @@ pub struct GithubOptions {
     /// Labels to add to resolved PRs/issues. Default: `["released"]`.
     #[serde(default = "default_released_labels")]
     pub released_labels: Vec<String>,
+
+    /// Inline git-cliff body template for the release notes, overriding the
+    /// default (grouped + contributor attribution) format.
+    #[serde(default)]
+    pub template: Option<String>,
+
+    /// Path (relative to the repo root) to a git-cliff body template file.
+    /// Takes precedence over `template`.
+    #[serde(default)]
+    pub template_file: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -70,6 +79,8 @@ impl Default for GithubOptions {
             comment_on_success: true,
             success_comment: None,
             released_labels: default_released_labels(),
+            template: None,
+            template_file: None,
         }
     }
 }
@@ -81,8 +92,18 @@ impl Step for GithubStep {
         "github"
     }
 
+    fn has_release_phase(&self) -> bool {
+        true
+    }
+
     fn verify(&self, ctx: &StepContext, config: &StepConfig) -> Result<()> {
-        let _opts: GithubOptions = parse_options(config)?;
+        let opts: GithubOptions = parse_options(config)?;
+        // Validate the custom template resolves now, before anything is pushed.
+        super::resolve_template(
+            ctx.repo_root,
+            opts.template.as_deref(),
+            opts.template_file.as_deref(),
+        )?;
         // A token is only needed when we will actually publish, i.e. when the
         // tool pushes the tags the release attaches to.
         if !ctx.dry_run && ctx.cfg.git.push && GitHubForge.token().is_none() {
@@ -104,7 +125,6 @@ impl Step for GithubStep {
         if releases.is_empty() {
             return Ok(());
         }
-        println!("{} Publishing releases", style(">>").bold().blue());
 
         // Assets and comments depend only on shared config, not on the
         // individual release — compute them once.
@@ -154,6 +174,10 @@ impl Step for GithubStep {
         // Each release body is generated enriched with GitHub contributors/PR
         // links (see `build_plan`); the shared GitHub context is resolved once.
         // This runs outside any tokio runtime — git-cliff blocks on its own.
+        let web_url = format!(
+            "https://{}/{}/{}",
+            gh_repo.host, gh_repo.owner, gh_repo.repo
+        );
         let gh = GithubContext {
             owner: &gh_repo.owner,
             repo: &gh_repo.repo,
@@ -165,10 +189,16 @@ impl Step for GithubStep {
                 .ok()
                 .and_then(|h| h.peel_to_commit().ok())
                 .map(|c| c.id().to_string()),
+            web_url: &web_url,
         };
+        let template = super::resolve_template(
+            ctx.repo_root,
+            opts.template.as_deref(),
+            opts.template_file.as_deref(),
+        )?;
         let plans: Vec<_> = releases
             .iter()
-            .map(|r| build_plan(ctx, &opts, r, &assets, &gh))
+            .map(|r| build_plan(ctx, &opts, r, &assets, &gh, template.as_deref()))
             .collect();
 
         let results = forge.publish_releases(&token, base_uri.as_deref(), &gh_repo, &plans)?;
@@ -249,10 +279,17 @@ fn build_plan(
     release: &PackageRelease,
     assets: &[PathBuf],
     gh: &GithubContext,
+    template: Option<&str>,
 ) -> forge::ReleasePlan {
     let tag = ctx.cfg.format_tag(
         &release.package_name,
         &release.next_version,
+        release.is_root,
+    );
+    // The prior release's tag, for the "Full Changelog" compare link.
+    let previous_tag = ctx.cfg.format_tag(
+        &release.package_name,
+        &release.current_version,
         release.is_root,
     );
     let name = render_release_name(
@@ -264,15 +301,16 @@ fn build_plan(
     let prerelease = opts
         .prerelease
         .unwrap_or_else(|| ctx.branch.prerelease.is_some());
-    // Enrich with contributors/PR links, falling back to plain notes if the
-    // GitHub fetch fails.
-    let body = generate_release_notes_with_github(release, gh).unwrap_or_else(|e| {
-        eprintln!(
-            "  [github] Warning: could not fetch contributor info for {}, using plain notes: {}",
-            tag, e
-        );
-        generate_release_notes(release).unwrap_or_default()
-    });
+    // Enrich with contributors/PR links; on a template error (both the online
+    // and offline render failed), fall back to the default plain notes.
+    let body = generate_release_notes_with_github(release, gh, &tag, &previous_tag, template)
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "  [github] Warning: could not render release notes for {}, using plain notes: {}",
+                tag, e
+            );
+            generate_release_notes(release, None).unwrap_or_default()
+        });
 
     forge::ReleasePlan {
         tag,

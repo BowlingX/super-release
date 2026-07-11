@@ -20,6 +20,7 @@ pub const PREVIEW_MARKER: &str = "<!-- super-release:preview -->";
 pub fn render_preview_markdown(
     releases: &[PackageRelease],
     notes_packages: &HashSet<String>,
+    changelog_template: Option<&str>,
     cfg: &Config,
 ) -> String {
     let mut out = String::new();
@@ -55,7 +56,7 @@ pub fn render_preview_markdown(
         if !notes_packages.contains(&r.package_name) {
             continue;
         }
-        let notes = generate_release_notes(r)
+        let notes = generate_release_notes(r, changelog_template)
             .unwrap_or_else(|e| format!("_Failed to render release notes: {}_", e));
         let _ = write!(
             out,
@@ -93,7 +94,7 @@ mod tests {
 
     #[test]
     fn empty_releases_render_no_release_message() {
-        let md = render_preview_markdown(&[], &HashSet::new(), &Config::default());
+        let md = render_preview_markdown(&[], &HashSet::new(), None, &Config::default());
         assert!(md.starts_with(PREVIEW_MARKER));
         assert!(md.contains("No release will be triggered"));
     }
@@ -108,7 +109,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let md = render_preview_markdown(&releases, &notes, &Config::default());
+        let md = render_preview_markdown(&releases, &notes, None, &Config::default());
 
         assert!(md.starts_with(PREVIEW_MARKER));
         assert!(md.contains("| `root-pkg` |"));
@@ -126,7 +127,7 @@ mod tests {
         ];
         // Only root-pkg is covered by a changelog step.
         let notes: HashSet<String> = std::iter::once("root-pkg".to_string()).collect();
-        let md = render_preview_markdown(&releases, &notes, &Config::default());
+        let md = render_preview_markdown(&releases, &notes, None, &Config::default());
 
         // Both appear in the table, but only root-pkg gets a notes block.
         assert!(md.contains("| `root-pkg` |"));

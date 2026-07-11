@@ -42,6 +42,7 @@ steps:
     packages:
       - 'super-release'
     options:
+      release_name_template: 'v{version}'
       assets:
         - 'artifacts/**/*.tar.gz'
         - 'artifacts/**/*.zip'

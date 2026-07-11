@@ -73,6 +73,12 @@ pub trait Step: Send + Sync {
     ) -> Result<()> {
         Ok(())
     }
+
+    /// Whether this step does work in the release phase — drives the
+    /// "Publishing releases" header. Steps that implement `release` return true.
+    fn has_release_phase(&self) -> bool {
+        false
+    }
 }
 
 /// Create a step instance by name.
@@ -93,4 +99,21 @@ pub fn parse_options<T: serde::de::DeserializeOwned + Default>(config: &StepConf
     }
     serde_json::from_value(config.options.clone())
         .map_err(|e| anyhow::anyhow!("Invalid options for step '{}': {}", config.name, e))
+}
+
+/// Resolve a step's custom Tera body template: the contents of `template_file`
+/// (read relative to the repo root) take precedence over the inline `template`.
+/// Returns `None` when neither is set — the step uses its default template.
+pub fn resolve_template(
+    repo_root: &std::path::Path,
+    template: Option<&str>,
+    template_file: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(path) = template_file {
+        let full = repo_root.join(path);
+        let body = std::fs::read_to_string(&full)
+            .map_err(|e| anyhow::anyhow!("reading template file '{}': {}", full.display(), e))?;
+        return Ok(Some(body));
+    }
+    Ok(template.map(String::from))
 }

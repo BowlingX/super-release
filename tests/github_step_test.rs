@@ -41,6 +41,27 @@ fn add_remote(dir: &TempDir, root: &Path) {
 }
 
 #[test]
+fn changelog_custom_inline_template_is_used() {
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    // A changelog step with a custom inline body template.
+    setup(
+        root,
+        "branches: [main]\nsteps:\n  - name: changelog\n    options:\n      template: 'CUSTOM NOTES v{{ version }}'\n",
+    );
+
+    super_release_bin()
+        .current_dir(root)
+        .arg("--dry-run")
+        .env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
+        .assert()
+        .success()
+        // The dry-run changelog preview renders our custom template, not the default.
+        .stdout(predicate::str::contains("CUSTOM NOTES v1.1.0"));
+}
+
+#[test]
 fn dry_run_reports_would_create_release() {
     let dir = TempDir::new().unwrap();
     let root = dir.path();

@@ -342,6 +342,8 @@ steps:
     options:
       filename: CHANGELOG.md
       preview_lines: 20
+      # template_file: templates/changelog.tera  # custom git-cliff body (path)
+      # template: '## {{ version }}\n{% for c in commits %}- {{ c.message }}\n{% endfor %}'  # or inline
 
   - name: npm
     packages: ['@acme/*'] # only publish @acme packages
@@ -372,7 +374,16 @@ steps:
       comment_on_success: true # comment on resolved PRs/issues (default: true)
       released_labels: ['released'] # labels added to them (default: ['released'])
       # success_comment: '🎉 Shipped in {releases}'  # {releases} = the tags, {tag}
+      # template_file: templates/release.tera  # custom git-cliff release body (path)
+      # template: '## {{ version }}...'         # or inline
 ```
+
+Both the `changelog` and `github` steps accept a custom [git-cliff](https://git-cliff.org/) body template
+(`template` inline, or `template_file` as a repo-root-relative path; the file wins if both are set). The
+`github` template additionally has GitHub data available — `commit.remote.username` / `commit.remote.pr_number`
+for `@author` and PR links, `github.contributors` (with `is_first_time`) for a "New Contributors" section, and
+`extra.repo_url` / `extra.tag` / `extra.previous_tag` for the compare link. Defaults: the grouped conventional
+changelog for `changelog`, and that plus GitHub attribution for `github`.
 
 Each step can be scoped:
 
