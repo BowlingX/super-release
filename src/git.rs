@@ -52,7 +52,7 @@ impl TagIndex {
         let mut matched_tag_names: HashSet<String> = HashSet::new();
         let mut all_stable_versions: HashMap<String, HashSet<Version>> = HashMap::new();
 
-        for tag_name in tag_names.iter().flatten() {
+        for tag_name in tag_names.iter().flatten().flatten() {
             for (pkg_name, _is_root, tag_re) in &pkg_regexes {
                 let Some(v) = extract_version_from_tag(tag_name, tag_re) else {
                     continue;

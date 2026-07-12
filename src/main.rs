@@ -171,7 +171,7 @@ fn main() -> Result<()> {
             let head = repo
                 .head()
                 .ok()
-                .and_then(|h| h.shorthand().map(String::from));
+                .and_then(|h| h.shorthand().ok().map(String::from));
             let branch = head.as_deref().unwrap_or("HEAD");
             printfl!(
                 "{} Branch '{}' is not configured for releases, skipping.",
