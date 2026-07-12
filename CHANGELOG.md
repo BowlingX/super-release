@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.11.1] - 2026-07-12
+
+### 🐛 Bug Fixes
+
+- Reduced binary size; stripped unused features (#32)
+
+### ⚙️ Miscellaneous Tasks
+
+- Bumped packages
 ## [1.11.0] - 2026-07-11
 
 ### 🚀 Features
