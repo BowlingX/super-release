@@ -30,7 +30,7 @@ impl Forge for GitHubForge {
 
     fn detect_repo(&self, repo: &git2::Repository, remote_name: &str) -> Result<RepoRef> {
         if let Ok(remote) = repo.find_remote(remote_name)
-            && let Some(url) = remote.url()
+            && let Ok(url) = remote.url()
             && let Some(parsed) = parse_repo_url(url)
         {
             return Ok(parsed);

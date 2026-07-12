@@ -132,7 +132,7 @@ pub fn resolve_forge(repo: &git2::Repository, remote_name: &str) -> Box<dyn Forg
 /// The host of the configured remote, if it parses as a repo URL.
 fn remote_host(repo: &git2::Repository, remote_name: &str) -> Option<String> {
     let remote = repo.find_remote(remote_name).ok()?;
-    parse_repo_url(remote.url()?).map(|r| r.host)
+    parse_repo_url(remote.url().ok()?).map(|r| r.host)
 }
 
 /// Parse an owner/repo (and host) out of a git remote URL. Handles the common
