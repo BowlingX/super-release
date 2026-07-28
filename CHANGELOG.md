@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.12.0] - 2026-07-28
+
+### 🚀 Features
+
+- Added support for `git revert` commit parsing (#39)
 ## [1.11.1] - 2026-07-12
 
 ### 🐛 Bug Fixes
