@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.12.1] - 2026-07-28
+
+### 🐛 Bug Fixes
+
+- Adjusted contributors rendering (#40)
 ## [1.12.0] - 2026-07-28
 
 ### 🚀 Features
