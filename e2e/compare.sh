@@ -203,6 +203,20 @@ compare() {
   fi
 }
 
+# Assert that neither tool releases. SR reports NO_RELEASE; our
+# --show-next-version falls back to the package.json version (1.0.0).
+compare_no_release() {
+  local name="$1"
+
+  if [ "$SR_VERSION" = "NO_RELEASE" ] && [ "$OUR_VERSION" = "1.0.0" ]; then
+    report_result "$name" "PASS" "sr=NO_RELEASE, us=1.0.0 [current]"
+  else
+    local detail
+    detail=$(printf "semantic-release: %s\nsuper-release: %s\n%s" "$SR_VERSION" "$OUR_VERSION" "$(echo "$SR_LAST_OUTPUT" | tail -10)")
+    report_result "$name" "FAIL" "$detail"
+  fi
+}
+
 
 # ── Test scenarios ───────────────────────────────────────────────────
 
@@ -299,15 +313,7 @@ steps: []"
 
   run_sr "$dir"
   run_ours "$dir"
-
-  # SR: NO_RELEASE. Us: returns current version (1.0.0) when no bump.
-  if [ "$SR_VERSION" = "NO_RELEASE" ] && [ "$OUR_VERSION" = "1.0.0" ]; then
-    report_result "chore → no release" "PASS" "sr=NO_RELEASE, us=1.0.0 [current]"
-  else
-    local detail
-    detail=$(printf "semantic-release: %s\nsuper-release: %s\n%s" "$SR_VERSION" "$OUR_VERSION" "$(echo "$SR_LAST_OUTPUT" | tail -10)")
-    report_result "chore → no release" "FAIL" "$detail"
-  fi
+  compare_no_release "chore → no release"
 }
 
 test_mixed_highest_wins() {
@@ -343,6 +349,68 @@ steps: []"
   run_sr "$dir"
   run_ours "$dir"
   compare "perf → patch (1.0.1)"
+}
+
+test_revert_patch() {
+  local dir
+  dir=$(setup_repo)
+
+  write_sr_config "$dir" '["main"]'
+  write_our_config "$dir" "branches: [main]
+steps: []"
+
+  git_commit "$dir" "chore: init"
+  git_tag "$dir" "v1.0.0"
+  git_commit "$dir" "feat: add feature"
+  git_tag "$dir" "v1.1.0"
+
+  # The feat is already released (v1.1.0), so the lone revert (git's default
+  # message, incl. the full sha) must yield a patch in both tools.
+  git -C "$dir" revert --no-edit HEAD > /dev/null 2>&1
+
+  run_sr "$dir"
+  run_ours "$dir"
+  compare "revert of released feat → patch (1.1.1)"
+}
+
+test_revert_cancels_unreleased() {
+  local dir
+  dir=$(setup_repo)
+
+  write_sr_config "$dir" '["main"]'
+  write_our_config "$dir" "branches: [main]
+steps: []"
+
+  git_commit "$dir" "chore: init"
+  git_tag "$dir" "v1.0.0"
+  git_commit "$dir" "feat: add feature"
+  git -C "$dir" revert --no-edit HEAD > /dev/null 2>&1
+
+  run_sr "$dir"
+  run_ours "$dir"
+
+  # The feat and its revert are both in the unreleased range, so they cancel
+  # each other out.
+  compare_no_release "revert cancels unreleased feat → no release"
+}
+
+test_revert_no_footer() {
+  local dir
+  dir=$(setup_repo)
+
+  write_sr_config "$dir" '["main"]'
+  write_our_config "$dir" "branches: [main]
+steps: []"
+
+  git_commit "$dir" "chore: init"
+  git_tag "$dir" "v1.0.0"
+  # semantic-release's revert rule keys on the `This reverts commit <sha>.`
+  # footer; a bare `revert:` commit releases nothing. We match that.
+  git_commit "$dir" "revert: undo thing"
+
+  run_sr "$dir"
+  run_ours "$dir"
+  compare_no_release "bare revert without footer → no release"
 }
 
 test_prerelease_first() {
@@ -771,6 +839,9 @@ main() {
     test_chore_no_release
     test_mixed_highest_wins
     test_perf_patch
+    test_revert_patch
+    test_revert_cancels_unreleased
+    test_revert_no_footer
     test_prerelease_first
     test_prerelease_increment
     test_prerelease_breaking
