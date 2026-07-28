@@ -35,7 +35,9 @@ pub fn to_cliff_commits(commits: &[ConventionalCommit]) -> Vec<CliffCommit<'_>> 
                 .oid
                 .map(|o| o.to_string())
                 .unwrap_or_else(|| c.hash.clone());
-            CliffCommit::new(id, c.raw_message.clone())
+            // git-cliff's default config filters unconventional subjects, which
+            // would silently drop git-style reverts from rendered notes.
+            CliffCommit::new(id, c.normalized_message())
         })
         .collect()
 }
@@ -192,6 +194,7 @@ mod tests {
             body: None,
             breaking: false,
             bump: BumpLevel::Minor,
+            revert: None,
             raw_message: "feat: x".into(),
             files_changed: vec![],
         };
@@ -240,6 +243,7 @@ mod tests {
                 body: None,
                 breaking: false,
                 bump: BumpLevel::None,
+                revert: None,
                 raw_message: msg.into(),
                 files_changed: vec![],
             }
@@ -328,6 +332,43 @@ mod tests {
         assert!(notes.contains("- @alice"), "{notes}");
         assert!(notes.contains("- @bob"), "{notes}");
         assert!(!notes.contains("- @\n"), "unlinked author leaked:\n{notes}");
+    }
+
+    /// A git-style `Revert "..."` commit must survive git-cliff's
+    /// filter_unconventional and render under the default "◀️ Revert" group.
+    #[test]
+    fn git_style_revert_renders_under_revert_heading() {
+        let msg = "Revert \"feat: add a thing\"\n\nThis reverts commit aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.";
+        let commit = crate::commit::parse_conventional_commit("00000000", msg).unwrap();
+        let release = PackageRelease {
+            package_name: "pkg".into(),
+            current_version: semver::Version::new(1, 1, 0),
+            next_version: semver::Version::new(1, 1, 1),
+            bump: BumpLevel::Patch,
+            commits: vec![commit],
+            is_root: false,
+            propagated_from: None,
+        };
+
+        let mut config = GITHUB_CLIFF_CONFIG.clone();
+        config.remote.offline = true;
+        let cliff = enriched_release(
+            &release,
+            None,
+            "https://github.com/o/r",
+            "pkg/v1.1.1",
+            "pkg/v1.1.0",
+        );
+        let notes = render_changelog(config, cliff).unwrap();
+
+        assert!(
+            notes.contains("◀️ Revert"),
+            "missing revert heading:\n{notes}"
+        );
+        assert!(
+            notes.contains("add a thing"),
+            "missing reverted subject:\n{notes}"
+        );
     }
 
     /// A custom template overrides the default body.

@@ -218,7 +218,22 @@ release may differ after a squash-merge. Requires `pull-requests: write` permiss
 | `feat: ...`                                           | minor      |
 | `feat!: ...` or `BREAKING CHANGE:` in footer          | major      |
 | `perf: ...`                                           | patch      |
+| `Revert "..."` or `revert: ...` with a `This reverts commit <sha>` footer | patch |
 | `chore: ...`, `docs: ...`, `ci: ...`, `refactor: ...` | no release |
+
+### Reverts
+
+Revert commits behave exactly like they do in
+[semantic-release](https://semantic-release.gitbook.io/semantic-release/support/faq#how-can-i-revert-a-release):
+
+- Reverting an **already-released** commit triggers a **patch** release, and the revert shows up in the changelog and
+  release notes under a `◀️ Revert` section.
+- If a commit **and its revert** both land in the same unreleased range, they cancel each other out (per package) and
+  neither counts toward the release.
+- The message `git revert` produces (`Revert "feat: ..."` plus `This reverts commit <sha>.`) works out of the box — no
+  editing needed. The Angular-style `revert: feat: ...` form is supported too.
+- A `revert:` commit **without** the `This reverts commit <sha>` footer does not trigger a release (matching
+  semantic-release's default release rules).
 
 ## Configuration
 

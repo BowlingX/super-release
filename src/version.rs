@@ -206,6 +206,10 @@ pub fn determine_releases(
                 })
                 .unwrap_or_default();
 
+            // Per package: a revert whose target is already released stays
+            // alone in this package's range and yields a patch.
+            let pkg_commits = crate::commit::filter_reverted_commits(pkg_commits);
+
             if pkg_commits.is_empty() {
                 return Ok(None);
             }
@@ -353,7 +357,7 @@ fn calculate_next_version(
     commits: &[ConventionalCommit],
     branch_ctx: &BranchContext,
 ) -> Result<Version> {
-    // chore/docs/ci/style/test/build/refactor don't trigger releases.
+    // chore/docs/ci/style/test/build/refactor and bare reverts don't trigger releases.
     let bump_commits: Vec<ConventionalCommit> = commits
         .iter()
         .filter(|c| c.bump > BumpLevel::None)
@@ -869,6 +873,43 @@ mod tests {
                 .unwrap();
         assert_eq!(result.major, 1, "Major should stay capped at 1");
         assert_eq!(result, Version::parse("1.6.0").unwrap());
+    }
+
+    const REVERT_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    /// Exercises the real git-cliff path with the normalized message.
+    #[test]
+    fn test_lone_git_style_revert_bumps_patch() {
+        let v = Version::parse("1.1.0").unwrap();
+        let msg = format!("Revert \"feat: add login\"\n\nThis reverts commit {REVERT_SHA}.");
+        let result = calculate_next_version(&v, &[make_commit(&msg)], &stable_ctx()).unwrap();
+        assert_eq!(result, Version::parse("1.1.1").unwrap());
+    }
+
+    #[test]
+    fn test_lone_angular_revert_bumps_patch() {
+        let v = Version::parse("1.1.0").unwrap();
+        let msg = format!("revert: feat: add login\n\nThis reverts commit {REVERT_SHA}.");
+        let result = calculate_next_version(&v, &[make_commit(&msg)], &stable_ctx()).unwrap();
+        assert_eq!(result, Version::parse("1.1.1").unwrap());
+    }
+
+    /// semantic-release parity: `revert:` without the footer is not a release.
+    #[test]
+    fn test_bare_revert_no_release() {
+        let v = Version::parse("1.0.0").unwrap();
+        let result =
+            calculate_next_version(&v, &[make_commit("revert: undo thing")], &stable_ctx())
+                .unwrap();
+        assert_eq!(result, v, "bare revert should not bump");
+    }
+
+    #[test]
+    fn test_lone_revert_prerelease_bumps_patch() {
+        let v = Version::parse("1.0.0").unwrap();
+        let msg = format!("Revert \"feat: add login\"\n\nThis reverts commit {REVERT_SHA}.");
+        let result = calculate_prerelease_version(&v, &[make_commit(&msg)], "beta").unwrap();
+        assert_eq!(result, Version::parse("1.0.1-beta.1").unwrap());
     }
 
     fn make_commit(message: &str) -> ConventionalCommit {
