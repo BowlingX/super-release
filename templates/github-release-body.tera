@@ -9,18 +9,23 @@
 - {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}]({{ extra.repo_url }}/pull/{{ commit.remote.pr_number }}){% endif %}
 {%- endfor %}
 {% endfor -%}
-{% set new_contributors = github.contributors | filter(attribute="is_first_time", value=true) -%}
+{#- github.contributors also credits authors of commits skipped by the commit
+    parsers (e.g. chore(deps)), so derive credits from the rendered commits. -#}
+{% set contributors = commits | map(attribute="remote.username") | unique -%}
+{% set new_contributors = [] -%}
+{% for contributor in github.contributors | filter(attribute="is_first_time", value=true) -%}
+{% if contributor.username in contributors %}{% set_global new_contributors = new_contributors | concat(with=[contributor]) %}{% endif -%}
+{% endfor -%}
 {% if new_contributors | length > 0 %}
 ### 🎉 New Contributors
 {% for contributor in new_contributors %}
 - @{{ contributor.username }} made their first contribution{% if contributor.pr_number %} in [#{{ contributor.pr_number }}]({{ extra.repo_url }}/pull/{{ contributor.pr_number }}){% endif %}
 {%- endfor %}
 {% endif -%}
-{% set contributors = github.contributors | filter(attribute="username") -%}
 {% if contributors | length > 0 %}
 ### 👥 Contributors
 {% for contributor in contributors %}
-- @{{ contributor.username }}
+- @{{ contributor }}
 {%- endfor %}
 {% endif -%}
 {% if extra.previous_tag %}

@@ -16,7 +16,9 @@ static CLIFF_CONFIG: LazyLock<CliffConfig> =
     LazyLock::new(|| "".parse().expect("Failed to load git-cliff default config"));
 
 /// Compare/PR links use `extra.repo_url`/`extra.tag`/`extra.previous_tag` so they
-/// point at real tag names, not the bare version.
+/// point at real tag names, not the bare version. Contributor credits are derived
+/// from the rendered commits, not `github.contributors`, which also counts commits
+/// skipped by the commit parsers (e.g. `chore(deps)` bumps).
 const GITHUB_GROUPED_BODY: &str = include_str!("../templates/github-release-body.tera");
 
 /// Parsed once; the remote/token is set on the clone per release.
@@ -258,8 +260,6 @@ mod tests {
             propagated_from: None,
         };
 
-        let mut config = GITHUB_CLIFF_CONFIG.clone();
-        config.remote.offline = true;
         let cliff = enriched_release(
             &release,
             None,
@@ -267,7 +267,7 @@ mod tests {
             "pkg/v1.1.0",
             "pkg/v1.0.0",
         );
-        let notes = render_changelog(config, cliff).unwrap();
+        let notes = render_offline(cliff);
 
         assert!(
             notes.contains("Add a thing"),
@@ -287,41 +287,66 @@ mod tests {
         );
     }
 
-    /// The github template lists contributors plus a New Contributors highlight, dropping unlinked authors (`username = None`).
-    #[test]
-    fn contributors_and_new_contributors_render() {
-        use git_cliff_core::contributor::RemoteContributor;
-        use git_cliff_core::remote::RemoteReleaseMetadata;
-
-        let contributor = |name: Option<&str>, first_time: bool| RemoteContributor {
+    fn contributor(
+        name: Option<&str>,
+        first_time: bool,
+    ) -> git_cliff_core::contributor::RemoteContributor {
+        git_cliff_core::contributor::RemoteContributor {
             username: name.map(String::from),
             pr_title: None,
             pr_number: None,
             pr_labels: vec![],
             is_first_time: first_time,
-        };
-        let cliff = CliffRelease {
+        }
+    }
+
+    fn commit_by(id: &str, msg: &str, username: Option<&str>) -> CliffCommit<'static> {
+        let mut commit = CliffCommit::new(id.into(), msg.into());
+        commit.remote = Some(contributor(username, false));
+        commit
+    }
+
+    fn render_offline(release: CliffRelease) -> String {
+        let mut config = GITHUB_CLIFF_CONFIG.clone();
+        config.remote.offline = true;
+        render_changelog(config, release).unwrap()
+    }
+
+    /// Offline render of the github template for the given commits and
+    /// GitHub-reported contributors.
+    fn render_github_notes(
+        commits: Vec<CliffCommit<'static>>,
+        contributors: Vec<git_cliff_core::contributor::RemoteContributor>,
+    ) -> String {
+        render_offline(CliffRelease {
             version: Some("1.1.0".into()),
-            commits: vec![CliffCommit::new("aaaaaaa".into(), "feat: a thing".into())],
+            commits,
             timestamp: Some(0),
-            github: RemoteReleaseMetadata {
-                contributors: vec![
-                    contributor(Some("alice"), true),
-                    contributor(Some("bob"), false),
-                    contributor(None, false), // unlinked author — must be dropped
-                ],
-            },
+            github: git_cliff_core::remote::RemoteReleaseMetadata { contributors },
             extra: Some(serde_json::json!({
                 "repo_url": "https://github.com/o/r",
                 "tag": "pkg/v1.1.0",
                 "previous_tag": "pkg/v1.0.0",
             })),
             ..Default::default()
-        };
+        })
+    }
 
-        let mut config = GITHUB_CLIFF_CONFIG.clone();
-        config.remote.offline = true;
-        let notes = render_changelog(config, cliff).unwrap();
+    /// The github template lists contributors plus a New Contributors highlight, dropping unlinked authors (`username = None`).
+    #[test]
+    fn contributors_and_new_contributors_render() {
+        let notes = render_github_notes(
+            vec![
+                commit_by("aaaaaaa", "feat: a thing", Some("alice")),
+                commit_by("bbbbbbb", "fix: b thing", Some("bob")),
+                commit_by("ccccccc", "fix: c thing", None), // unlinked author — must be dropped
+            ],
+            vec![
+                contributor(Some("alice"), true),
+                contributor(Some("bob"), false),
+                contributor(None, true),
+            ],
+        );
 
         assert!(notes.contains("### 🎉 New Contributors"), "{notes}");
         assert!(
@@ -332,6 +357,41 @@ mod tests {
         assert!(notes.contains("- @alice"), "{notes}");
         assert!(notes.contains("- @bob"), "{notes}");
         assert!(!notes.contains("- @\n"), "unlinked author leaked:\n{notes}");
+        assert!(
+            !notes.contains("- @ made"),
+            "unlinked first-timer leaked:\n{notes}"
+        );
+    }
+
+    /// Authors whose only commits are skipped by the commit parsers (e.g. dependabot's
+    /// `chore(deps)` bumps) must not be credited — in either contributor section.
+    #[test]
+    fn skipped_commit_authors_are_not_credited() {
+        let notes = render_github_notes(
+            vec![
+                commit_by("aaaaaaa", "feat: a thing", Some("alice")),
+                commit_by(
+                    "bbbbbbb",
+                    "chore(deps-dev): bump foo from 1.0.0 to 2.0.0",
+                    Some("dependabot[bot]"),
+                ),
+            ],
+            vec![
+                contributor(Some("alice"), false),
+                // first_time too, so the New Contributors highlight is covered as well
+                contributor(Some("dependabot[bot]"), true),
+            ],
+        );
+
+        assert!(notes.contains("- @alice"), "{notes}");
+        assert!(
+            !notes.to_lowercase().contains("bump foo"),
+            "skipped commit rendered:\n{notes}"
+        );
+        assert!(
+            !notes.contains("dependabot"),
+            "author of skipped commit credited:\n{notes}"
+        );
     }
 
     /// A git-style `Revert "..."` commit must survive git-cliff's
@@ -350,8 +410,6 @@ mod tests {
             propagated_from: None,
         };
 
-        let mut config = GITHUB_CLIFF_CONFIG.clone();
-        config.remote.offline = true;
         let cliff = enriched_release(
             &release,
             None,
@@ -359,7 +417,7 @@ mod tests {
             "pkg/v1.1.1",
             "pkg/v1.1.0",
         );
-        let notes = render_changelog(config, cliff).unwrap();
+        let notes = render_offline(cliff);
 
         assert!(
             notes.contains("◀️ Revert"),
