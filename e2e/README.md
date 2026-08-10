@@ -26,5 +26,6 @@ Each scenario creates a fresh git repo, configures both tools with equivalent se
 
 - **Stable releases**: feat→minor, fix→patch, breaking→major, mixed commits, perf, chore (no release)
 - **Prerelease branches**: first prerelease, increment, breaking on prerelease
+- **Dotted channels & stale tags**: dotted channel names (e.g. branch `test-1.0`) and hand-made counter-less channel tags; two scenarios pin *documented divergences* where semantic-release re-plans an already-released version (node-semver splits prerelease identifiers at dots; unreachable tags after a rebase are invisible to its planning) while super-release increments correctly / fails fast with guidance
 - **Maintenance branches**: fix on 1.x, feat on 1.x, breaking capped to minor
 - **Edge cases**: first release with no prior tags
