@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::LazyLock;
 
 use anyhow::Result;
 use git2::Repository;
@@ -47,6 +48,7 @@ pub fn determine_releases(
     packages: &[Package],
     config: &Config,
     branch_ctx: &BranchContext,
+    head_is_branch_tip: bool,
 ) -> Result<Vec<PackageRelease>> {
     let pkg_pairs: Vec<(String, bool)> = packages
         .iter()
@@ -88,8 +90,17 @@ pub fn determine_releases(
                     // don't attribute the entire repo history to this new package.
                     let intro_oid =
                         git::find_file_introduction_oid(repo, repo_path, &pkg.manifest_path);
+                    // On stable/maintenance branches a prerelease-flavored manifest
+                    // version (e.g. 1.0.0-rc.1) must not leak into stable version
+                    // math — it would ship a prerelease under the release dist-tag.
+                    let current_version =
+                        if branch_ctx.prerelease.is_none() && !pkg.version.pre.is_empty() {
+                            stable_base(&pkg.version)
+                        } else {
+                            pkg.version.clone()
+                        };
                     Ok(PkgTagInfo {
-                        current_version: pkg.version.clone(),
+                        current_version,
                         cutoff_oid: intro_oid,
                         cutoff_tag: None,
                         cutoff_inclusive: true,
@@ -233,7 +244,11 @@ pub fn determine_releases(
                 );
             }
 
-            let bump = classify_bump(&tag_info.current_version, &next_version);
+            let bump = classify_bump(
+                &tag_info.current_version,
+                &next_version,
+                branch_ctx.prerelease.as_deref(),
+            );
 
             if bump > BumpLevel::None {
                 Ok(Some(PackageRelease {
@@ -256,15 +271,41 @@ pub fn determine_releases(
     propagate_to_dependents(&mut releases, packages, &tag_infos, &tag_index, branch_ctx)?;
 
     // Tripwire: a prerelease-configured branch must never plan a stable release,
-    // no matter which path produced the version.
+    // no matter which path produced the version. Releases the branch's package
+    // allowlist will drop are exempt — they are never published.
     if let Some(ref channel) = branch_ctx.prerelease {
-        for r in &releases {
+        for r in releases
+            .iter()
+            .filter(|r| branch_ctx.includes_package(&r.package_name))
+        {
             if !prerelease_matches_channel(r.next_version.pre.as_str(), channel) {
                 anyhow::bail!(
                     "Internal error: planned version {} for '{}' is not on prerelease channel '{}'",
                     r.next_version,
                     r.package_name,
                     channel,
+                );
+            }
+            // A planned version can only equal an existing tag when that tag is
+            // not reachable from HEAD (otherwise it would have been the base and
+            // the plan would sit above it) — the branch has stale channel tags.
+            // That reasoning assumes HEAD is the branch tip; previews check out
+            // PR heads instead, so they warn rather than fail.
+            if tag_index.version_exists(&r.package_name, &r.next_version) {
+                if head_is_branch_tip {
+                    anyhow::bail!(
+                        "Version {} for '{}' already exists as a tag but is not reachable \
+                         from branch '{}'. The branch was likely rebased or force-pushed — \
+                         fetch tags and fast-forward, or delete the stale tag.",
+                        r.next_version,
+                        r.package_name,
+                        branch_ctx.branch_name,
+                    );
+                }
+                eprintln!(
+                    "  [version] Warning: version {} for '{}' already exists as a tag not \
+                     reachable from HEAD — the checkout may be behind the latest '{}' release",
+                    r.next_version, r.package_name, branch_ctx.branch_name
                 );
             }
         }
@@ -357,6 +398,13 @@ fn propagate_to_dependents(
     Ok(())
 }
 
+/// Synthetic commit standing in for a workspace dependency update when
+/// classifying the bump of a propagated release; never stored on the release.
+static DEP_UPDATE_COMMIT: LazyLock<ConventionalCommit> = LazyLock::new(|| {
+    crate::commit::parse_conventional_commit("00000000", "fix: workspace dependency update")
+        .expect("synthetic dependency-update commit is a valid conventional commit")
+});
+
 /// Next version for a release triggered purely by a workspace dependency
 /// update (no direct commits). Dependency updates are patch-level by
 /// convention; on prerelease branches the result must stay on the channel —
@@ -365,16 +413,20 @@ fn propagated_next_version(current: &Version, branch_ctx: &BranchContext) -> Res
     if let Some(ref channel) = branch_ctx.prerelease {
         // Already on this channel -> increment the prerelease number;
         // stable base -> x.y.(z+1)-<channel>.1
-        let dep_commit = crate::commit::parse_conventional_commit(
-            "00000000",
-            "fix: workspace dependency update",
-        )
-        .expect("synthetic dependency-update commit is a valid conventional commit");
-        return calculate_prerelease_version(current, &[dep_commit], channel);
+        return calculate_prerelease_version(
+            current,
+            std::slice::from_ref(&DEP_UPDATE_COMMIT),
+            channel,
+        );
     }
 
     // Stable and maintenance branches: patch + 1, prerelease and build metadata stripped.
     Ok(apply_bump(current, BumpLevel::Patch))
+}
+
+/// The stable part of a version — prerelease and build metadata stripped.
+fn stable_base(v: &Version) -> Version {
+    Version::new(v.major, v.minor, v.patch)
 }
 
 /// Find the oldest tag among all packages by comparing commit timestamps.
@@ -415,19 +467,21 @@ fn calculate_next_version(
         return Ok(current.clone());
     }
 
-    if let Some(ref channel) = branch_ctx.prerelease {
-        return calculate_prerelease_version(current, &bump_commits, channel);
-    }
-
-    if branch_ctx.maintenance {
-        return calculate_maintenance_version(
+    let mut next = if let Some(ref channel) = branch_ctx.prerelease {
+        calculate_prerelease_version(current, &bump_commits, channel)?
+    } else if branch_ctx.maintenance {
+        calculate_maintenance_version(
             current,
             &bump_commits,
             branch_ctx.maintenance_range.as_ref(),
-        );
-    }
+        )?
+    } else {
+        calculate_stable_version(current, &bump_commits)?
+    };
 
-    calculate_stable_version(current, &bump_commits)
+    // A released version never carries build metadata, whatever the base had.
+    next.build = semver::BuildMetadata::EMPTY;
+    Ok(next)
 }
 
 fn calculate_stable_version(current: &Version, commits: &[ConventionalCommit]) -> Result<Version> {
@@ -453,19 +507,23 @@ fn calculate_prerelease_version(
     commits: &[ConventionalCommit],
     channel: &str,
 ) -> Result<Version> {
-    let current_channel = extract_prerelease_channel(current);
-
-    if current_channel.as_deref() == Some(channel) {
-        let next_num = extract_prerelease_number(current) + 1;
+    // Parse the counter against the channel directly instead of guessing the
+    // channel from the prerelease string — dotted channel names (e.g. branch
+    // "test-1.0") would otherwise be split at the wrong dot. A counter at
+    // u64::MAX (hand-crafted tag) falls through to the fresh-base arm instead
+    // of wrapping below the base.
+    if let Some(counter) = channel_counter(current.pre.as_str(), channel)
+        && let Some(next_counter) = counter.checked_add(1)
+    {
         let mut next = current.clone();
-        next.pre = Prerelease::new(&format!("{}.{}", channel, next_num))
+        next.pre = Prerelease::new(&format!("{}.{}", channel, next_counter))
             .map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
         // A released version must not inherit build metadata from its base.
         next.build = semver::BuildMetadata::EMPTY;
         return Ok(next);
     }
 
-    let base = Version::new(current.major, current.minor, current.patch);
+    let base = stable_base(current);
     let next_stable = calculate_stable_version(&base, commits)?;
 
     let mut next = next_stable;
@@ -518,35 +576,28 @@ pub fn prerelease_matches_channel(pre: &str, channel: &str) -> bool {
     pre == channel || pre.starts_with(&format!("{}.", channel))
 }
 
-fn extract_prerelease_channel(version: &Version) -> Option<String> {
-    let pre = version.pre.as_str();
-    if pre.is_empty() {
-        return None;
+/// Counter of a `<channel>.<n>` prerelease on the given channel. `Some(0)` for
+/// a counter-less prerelease equal to the channel; `None` when the suffix
+/// after the channel is not numeric.
+fn channel_counter(pre: &str, channel: &str) -> Option<u64> {
+    let rest = pre.strip_prefix(channel)?;
+    if rest.is_empty() {
+        return Some(0);
     }
-    if let Some(dot_pos) = pre.rfind('.') {
-        let after_dot = &pre[dot_pos + 1..];
-        if after_dot.parse::<u64>().is_ok() {
-            return Some(pre[..dot_pos].to_string());
-        }
-    }
-    Some(pre.to_string())
+    rest.strip_prefix('.')?.parse().ok()
 }
 
-fn extract_prerelease_number(version: &Version) -> u64 {
-    let pre = version.pre.as_str();
-    if let Some(dot_pos) = pre.rfind('.') {
-        pre[dot_pos + 1..].parse().unwrap_or(0)
-    } else {
-        0
-    }
-}
-
-fn classify_bump(current: &Version, next: &Version) -> BumpLevel {
+/// Display-level bump label. `prerelease_channel` is the branch's channel when
+/// the branch is a prerelease branch; it decides whether `current` was already
+/// on the channel or the release switches channels (labeled Minor).
+fn classify_bump(current: &Version, next: &Version, prerelease_channel: Option<&str>) -> BumpLevel {
     if !next.pre.is_empty() {
+        let channel_switched = prerelease_channel.is_some_and(|ch| {
+            !current.pre.is_empty() && !prerelease_matches_channel(current.pre.as_str(), ch)
+        });
         if next.major > current.major
             || (current.pre.is_empty() && next.minor > current.minor)
-            || (!current.pre.is_empty()
-                && extract_prerelease_channel(current) != extract_prerelease_channel(next))
+            || channel_switched
         {
             return BumpLevel::Minor;
         }
@@ -624,30 +675,47 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_prerelease_channel() {
-        let v = Version::parse("2.0.0-beta.3").unwrap();
-        assert_eq!(extract_prerelease_channel(&v), Some("beta".into()));
+    fn test_classify_bump_prerelease_labels() {
+        let classify = |cur: &str, next: &str, ch: Option<&str>| {
+            classify_bump(
+                &Version::parse(cur).unwrap(),
+                &Version::parse(next).unwrap(),
+                ch,
+            )
+        };
 
-        let v = Version::parse("1.0.0-rc.1").unwrap();
-        assert_eq!(extract_prerelease_channel(&v), Some("rc".into()));
-
-        let v = Version::parse("1.0.0-next.10").unwrap();
-        assert_eq!(extract_prerelease_channel(&v), Some("next".into()));
-
-        let v = Version::parse("1.0.0").unwrap();
-        assert_eq!(extract_prerelease_channel(&v), None);
+        // On-channel increment is a patch, including dotted channel names.
+        assert_eq!(
+            classify("2.0.0-beta.3", "2.0.0-beta.4", Some("beta")),
+            BumpLevel::Patch
+        );
+        assert_eq!(
+            classify("1.2.3-test-1.0", "1.2.3-test-1.0.1", Some("test-1.0")),
+            BumpLevel::Patch
+        );
+        // Switching channels is labeled Minor.
+        assert_eq!(
+            classify("1.0.0-alpha.3", "1.0.1-beta.1", Some("beta")),
+            BumpLevel::Minor
+        );
+        // From a stable base, the underlying stable delta decides.
+        assert_eq!(
+            classify("1.0.0", "1.0.1-beta.1", Some("beta")),
+            BumpLevel::Patch
+        );
+        assert_eq!(
+            classify("1.0.0", "1.1.0-beta.1", Some("beta")),
+            BumpLevel::Minor
+        );
     }
 
     #[test]
-    fn test_extract_prerelease_number() {
-        let v = Version::parse("2.0.0-beta.3").unwrap();
-        assert_eq!(extract_prerelease_number(&v), 3);
-
-        let v = Version::parse("1.0.0-rc.15").unwrap();
-        assert_eq!(extract_prerelease_number(&v), 15);
-
-        let v = Version::parse("1.0.0").unwrap();
-        assert_eq!(extract_prerelease_number(&v), 0);
+    fn test_channel_counter() {
+        assert_eq!(channel_counter("beta.3", "beta"), Some(3));
+        assert_eq!(channel_counter("beta", "beta"), Some(0));
+        assert_eq!(channel_counter("test-1.0.2", "test-1.0"), Some(2));
+        assert_eq!(channel_counter("test-1.0", "test-1.0"), Some(0));
+        assert_eq!(channel_counter("beta.x", "beta"), None);
     }
 
     #[test]
@@ -664,6 +732,46 @@ mod tests {
         let commits = vec![make_commit("fix: something")];
         let result = calculate_prerelease_version(&current, &commits, "beta").unwrap();
         assert_eq!(result, Version::parse("2.0.0-beta.4").unwrap());
+    }
+
+    #[test]
+    fn test_stable_release_strips_build_metadata() {
+        let v = Version::parse("1.2.3+ci.7").unwrap();
+        let result = calculate_next_version(&v, &[make_commit("fix: x")], &stable_ctx()).unwrap();
+        assert_eq!(result, Version::parse("1.2.4").unwrap());
+    }
+
+    #[test]
+    fn test_prerelease_counter_overflow_starts_fresh() {
+        // A hand-crafted tag with a u64::MAX counter must not wrap below the base.
+        let current = Version::parse("1.0.0-beta.18446744073709551615").unwrap();
+        let result =
+            calculate_prerelease_version(&current, &[make_commit("fix: x")], "beta").unwrap();
+        assert_eq!(result, Version::parse("1.0.1-beta.1").unwrap());
+    }
+
+    #[test]
+    fn test_prerelease_dotted_channel_increments_in_place() {
+        // Channel names containing dots (e.g. branch "test-1.0") must not be
+        // split at the wrong dot.
+        let commits = vec![make_commit("fix: something")];
+        let current = Version::parse("1.2.3-test-1.0").unwrap();
+        let result = calculate_prerelease_version(&current, &commits, "test-1.0").unwrap();
+        assert_eq!(result, Version::parse("1.2.3-test-1.0.1").unwrap());
+
+        let current = Version::parse("1.2.3-test-1.0.2").unwrap();
+        let result = calculate_prerelease_version(&current, &commits, "test-1.0").unwrap();
+        assert_eq!(result, Version::parse("1.2.3-test-1.0.3").unwrap());
+    }
+
+    #[test]
+    fn test_prerelease_non_numeric_suffix_starts_fresh() {
+        // A hand-made tag like 1.0.0-beta.x has no counter to increment; it
+        // falls back to a stable bump with the channel's first counter.
+        let current = Version::parse("1.0.0-beta.x").unwrap();
+        let commits = vec![make_commit("fix: something")];
+        let result = calculate_prerelease_version(&current, &commits, "beta").unwrap();
+        assert_eq!(result, Version::parse("1.0.1-beta.1").unwrap());
     }
 
     #[test]
@@ -1006,7 +1114,7 @@ mod tests {
     }
 
     fn empty_tag_index() -> git::TagIndex {
-        git::TagIndex::from_stable_versions(HashMap::new())
+        git::TagIndex::from_tag_versions(HashMap::new())
     }
 
     #[test]
@@ -1142,7 +1250,7 @@ mod tests {
 
         let mut stable: HashMap<String, HashSet<Version>> = HashMap::new();
         stable.insert("@test/app".into(), HashSet::from([Version::new(1, 0, 1)]));
-        let tag_index = git::TagIndex::from_stable_versions(stable);
+        let tag_index = git::TagIndex::from_tag_versions(stable);
 
         propagate_to_dependents(
             &mut releases,
@@ -1156,6 +1264,35 @@ mod tests {
         // The colliding dependent is skipped, and nothing cascades past it.
         assert_eq!(releases.len(), 1);
         assert!(releases.iter().all(|r| r.package_name == "@test/core"));
+    }
+
+    #[test]
+    fn test_propagate_collision_detected_despite_build_metadata() {
+        let packages = vec![
+            make_pkg("@test/core", &[]),
+            make_pkg("@test/app", &["@test/core"]),
+        ];
+        let tag_infos = vec![make_tag_info("1.0.0"), make_tag_info("1.0.0")];
+        let mut releases = vec![seed_release("@test/core")];
+
+        // The colliding tag carries build metadata; it must still match.
+        let mut stable: HashMap<String, HashSet<Version>> = HashMap::new();
+        stable.insert(
+            "@test/app".into(),
+            HashSet::from([Version::parse("1.0.1+ci.7").unwrap()]),
+        );
+        let tag_index = git::TagIndex::from_tag_versions(stable);
+
+        propagate_to_dependents(
+            &mut releases,
+            &packages,
+            &tag_infos,
+            &tag_index,
+            &stable_ctx(),
+        )
+        .unwrap();
+
+        assert!(releases.iter().all(|r| r.package_name != "@test/app"));
     }
 
     #[test]

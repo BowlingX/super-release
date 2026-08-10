@@ -208,7 +208,7 @@ fn main() -> Result<()> {
     });
 
     let mut releases =
-        version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx)?;
+        version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx, true)?;
 
     let skipped = run::apply_branch_package_filter(&mut releases, &branch_ctx);
     verbosefl!(verbose_mode, {

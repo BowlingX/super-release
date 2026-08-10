@@ -12,8 +12,9 @@ use crate::config::{BranchContext, Config};
 pub struct TagIndex {
     /// Tags matching per package: package_name → Vec<(tag_name, version)>
     per_package: HashMap<String, Vec<(String, Version)>>,
-    /// ALL stable versions per package (unfiltered), used to detect version collisions on maintenance branches.
-    all_stable_versions: HashMap<String, HashSet<Version>>,
+    /// ALL tag versions per package (unfiltered by reachability, normalized via
+    /// `collision_key`), used to detect version collisions across branches.
+    all_tag_versions: HashMap<String, HashSet<Version>>,
 }
 
 impl TagIndex {
@@ -50,20 +51,18 @@ impl TagIndex {
         }
         let mut pre_candidates: Vec<PreCandidate> = Vec::new();
         let mut matched_tag_names: HashSet<String> = HashSet::new();
-        let mut all_stable_versions: HashMap<String, HashSet<Version>> = HashMap::new();
+        let mut all_tag_versions: HashMap<String, HashSet<Version>> = HashMap::new();
 
         for tag_name in tag_names.iter().flatten().flatten() {
             for (pkg_name, _is_root, tag_re) in &pkg_regexes {
                 let Some(v) = extract_version_from_tag(tag_name, tag_re) else {
                     continue;
                 };
-                // Collect ALL stable versions (unfiltered) for collision detection.
-                if v.pre.is_empty() {
-                    all_stable_versions
-                        .entry(pkg_name.to_string())
-                        .or_default()
-                        .insert(v.clone());
-                }
+                // Collect ALL versions (unfiltered) for collision detection.
+                all_tag_versions
+                    .entry(pkg_name.to_string())
+                    .or_default()
+                    .insert(collision_key(&v));
                 if !version_matches_branch(&v, branch_ctx) {
                     continue;
                 }
@@ -126,7 +125,7 @@ impl TagIndex {
 
         Ok(TagIndex {
             per_package,
-            all_stable_versions,
+            all_tag_versions,
         })
     }
 
@@ -153,21 +152,37 @@ impl TagIndex {
             .cloned()
     }
 
-    /// Check if a version already exists as a stable tag, regardless of which branch it was released on.
+    /// Check if a version already exists as a tag, regardless of which branch
+    /// it was released on or whether that tag is reachable from HEAD. Since
+    /// version equality includes the prerelease identifier, a stable query only
+    /// matches stable tags and a prerelease query only its own channel tags.
     pub fn version_exists(&self, package_name: &str, version: &Version) -> bool {
-        self.all_stable_versions
+        self.all_tag_versions
             .get(package_name)
-            .is_some_and(|versions| versions.contains(version))
+            .is_some_and(|versions| versions.contains(&collision_key(version)))
     }
 
-    /// Test-only: build an index with stable versions for collision checks and no per-package tags.
+    /// Test-only: build an index from raw tag versions (stable and prerelease),
+    /// with no per-package reachability data.
     #[cfg(test)]
-    pub fn from_stable_versions(all_stable_versions: HashMap<String, HashSet<Version>>) -> Self {
+    pub fn from_tag_versions(versions: HashMap<String, HashSet<Version>>) -> Self {
+        let all_tag_versions = versions
+            .into_iter()
+            .map(|(pkg, vs)| (pkg, vs.iter().map(collision_key).collect()))
+            .collect();
         TagIndex {
             per_package: HashMap::new(),
-            all_stable_versions,
+            all_tag_versions,
         }
     }
+}
+
+/// Collision key: tags like `1.0.1+ci.7` and `1.0.1` name the same release,
+/// but semver's `Eq`/`Hash` include build metadata — compare without it.
+fn collision_key(v: &Version) -> Version {
+    let mut key = v.clone();
+    key.build = semver::BuildMetadata::EMPTY;
+    key
 }
 
 fn extract_version_from_tag(tag_name: &str, tag_re: &Option<regex::Regex>) -> Option<Version> {

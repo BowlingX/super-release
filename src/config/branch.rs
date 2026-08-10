@@ -136,6 +136,17 @@ pub struct BranchContext {
     pub packages: Vec<String>,
 }
 
+impl BranchContext {
+    /// Whether the branch's package allowlist admits this package (empty = all).
+    pub fn includes_package(&self, package_name: &str) -> bool {
+        self.packages.is_empty()
+            || self
+                .packages
+                .iter()
+                .any(|pat| glob_match(pat, package_name))
+    }
+}
+
 /// Resolve the current HEAD against the branch config; `None` if the branch is not configured for releases.
 pub fn resolve_branch_context(
     repo: &git2::Repository,

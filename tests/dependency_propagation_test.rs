@@ -737,3 +737,266 @@ fn test_propagation_collision_skips_dependent_with_warning() {
         stderr
     );
 }
+
+#[test]
+fn test_propagation_collision_detected_despite_build_metadata_tag() {
+    // Same as above, but the colliding tag carries build metadata:
+    // v1.0.1+ci.7 and v1.0.1 name the same release number.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(
+        root,
+        &[
+            ("@test/core", "1.0.0", ""),
+            ("@test/app", "1.0.0", r#""@test/core": "^1.0.0""#),
+        ],
+        BASE_CONFIG,
+    );
+
+    git(root, &["checkout", "-b", "other"]);
+    fs::write(root.join("packages/app/src/index.ts"), "// other").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: change on other branch"]);
+    tag(root, "@test/app/v1.0.1+ci.7");
+    git(root, &["checkout", "main"]);
+
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: patch in core"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {}", stderr);
+
+    assert!(
+        stdout.contains("1 package(s) to release"),
+        "The colliding dependent must be skipped:\n{}",
+        stdout
+    );
+    assert!(
+        stderr.contains("Skipping cascade to '@test/app'"),
+        "Build metadata must not hide the collision:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_prerelease_stale_channel_tag_fails_with_guidance() {
+    // A channel tag that exists but is unreachable from HEAD (rebase or
+    // force-push) would silently produce an already-released version — the
+    // run must fail and tell the user how to resolve it.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(
+        root,
+        &[
+            ("@test/core", "1.0.0", ""),
+            ("@test/app", "1.0.0", r#""@test/core": "^1.0.0""#),
+        ],
+        PRERELEASE_CONFIG,
+    );
+
+    // Simulate a pre-rebase release: the channel tag sits on a commit that is
+    // no longer reachable from the branch.
+    git(root, &["checkout", "-b", "old-state"]);
+    fs::write(root.join("packages/app/src/index.ts"), "// pre-rebase").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: pre-rebase change"]);
+    tag(root, "@test/app/v1.0.1-test-branch.1");
+    git(root, &["checkout", "main"]);
+
+    git(root, &["checkout", "-b", "test-branch"]);
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: patch in core"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "Run must fail on a stale channel tag; stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        stderr.contains("already exists as a tag but is not reachable"),
+        "Should explain the stale-tag situation:\n{}",
+        stderr
+    );
+}
+
+const PRERELEASE_ALLOWLIST_CONFIG: &str = r#"
+branches:
+  - main
+  - name: "test-*"
+    prerelease: true
+    packages: ["@test/core"]
+exclude:
+  - mono-root
+steps: []
+"#;
+
+#[test]
+fn test_prerelease_allowlist_excluded_stale_tag_does_not_block_run() {
+    // A stale channel tag on a package the branch's `packages:` allowlist
+    // excludes must not abort the run — that package is never released here.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(
+        root,
+        &[("@test/core", "1.0.0", ""), ("@test/app", "1.0.0", "")],
+        PRERELEASE_ALLOWLIST_CONFIG,
+    );
+
+    git(root, &["checkout", "-b", "old-state"]);
+    fs::write(root.join("packages/app/src/index.ts"), "// pre-rebase").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: pre-rebase change"]);
+    tag(root, "@test/app/v1.0.1-test-branch.1");
+    git(root, &["checkout", "main"]);
+
+    git(root, &["checkout", "-b", "test-branch"]);
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    fs::write(root.join("packages/app/src/index.ts"), "// app v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: change both packages"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "Excluded package's stale tag must not fail the run; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("packages/core/package.json: 1.0.0 -> 1.0.1-test-branch.1"),
+        "Allowlisted package must still release:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("packages/app/package.json:"),
+        "Excluded package must not be released:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_preview_warns_instead_of_failing_on_unreachable_channel_tag() {
+    // Previews check out PR heads, where the latest channel tag is routinely
+    // not reachable — the stale-tag protection must warn, not abort.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(root, &[("@test/core", "1.0.0", "")], PRERELEASE_CONFIG);
+
+    git(root, &["checkout", "-b", "test-branch"]);
+    fs::write(root.join("packages/core/src/index.ts"), "// first").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: first"]);
+    tag(root, "@test/core/v1.0.1-test-branch.1");
+
+    // PR branch forks here; the release branch then moves on with another release.
+    git(root, &["checkout", "-b", "feature-pr"]);
+    git(root, &["checkout", "test-branch"]);
+    fs::write(root.join("packages/core/src/index.ts"), "// second").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: second"]);
+    tag(root, "@test/core/v1.0.1-test-branch.2");
+
+    git(root, &["checkout", "feature-pr"]);
+    fs::write(root.join("packages/core/src/index.ts"), "// pr change").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: pr change"]);
+
+    let output = super_release_bin()
+        .args(["--preview", "--base", "test-branch", "--no-comment"])
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "Preview must not fail on an unreachable channel tag; stderr: {}",
+        stderr
+    );
+    assert!(
+        stderr.contains("already exists as a tag not"),
+        "Preview should warn about the unreachable tag:\n{}",
+        stderr
+    );
+}
+
+#[test]
+fn test_stable_branch_strips_manifest_prerelease_on_first_release() {
+    // A first-release package whose manifest carries a prerelease (1.0.0-rc.1)
+    // must not ship a prerelease from a stable branch — the base is treated
+    // as 1.0.0, and direct and propagated releases agree.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(
+        root,
+        &[
+            ("@test/core", "1.0.0-rc.1", ""),
+            ("@test/app", "1.0.0", r#""@test/core": "^1.0.0""#),
+        ],
+        BASE_CONFIG,
+    );
+
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: patch in core"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        stdout.contains("packages/core/package.json: 1.0.0 -> 1.0.1"),
+        "Manifest prerelease must be stripped to a stable base:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("packages/app/package.json: 1.0.0 -> 1.0.1"),
+        "Propagated dependent must agree with the direct path:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("rc."),
+        "No prerelease may appear in a stable branch's plan:\n{}",
+        stdout
+    );
+}
