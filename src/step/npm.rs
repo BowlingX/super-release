@@ -358,6 +358,7 @@ fn dependency_levels(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::make_pkg;
 
     #[test]
     fn test_dependency_levels() {
@@ -394,27 +395,5 @@ mod tests {
         assert!(levels[1].contains(&"b".to_string()));
         assert!(levels[1].contains(&"c".to_string()));
         assert_eq!(levels[2], vec!["d"]);
-    }
-
-    fn make_pkg(name: &str, deps: &[&str]) -> Package {
-        Package {
-            name: name.to_string(),
-            version: semver::Version::new(1, 0, 0),
-            path: std::path::PathBuf::from(format!("packages/{}", name)),
-            manifest_path: std::path::PathBuf::from(format!("packages/{}/package.json", name)),
-            is_root: false,
-            local_dependencies: deps
-                .iter()
-                .map(|d| (d.to_string(), "^1.0.0".to_string()))
-                .collect(),
-            dependencies: deps
-                .iter()
-                .map(|d| (d.to_string(), "^1.0.0".to_string()))
-                .collect(),
-            dev_dependencies: HashMap::new(),
-            optional_dependencies: HashMap::new(),
-            warning: None,
-            skipped: false,
-        }
     }
 }

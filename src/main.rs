@@ -13,6 +13,8 @@ mod preview;
 mod resolver;
 mod run;
 mod step;
+#[cfg(test)]
+mod test_fixtures;
 mod version;
 
 use anyhow::{Context, Result};

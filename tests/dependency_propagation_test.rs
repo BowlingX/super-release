@@ -491,3 +491,249 @@ fn test_diamond_dependency_propagation() {
         );
     }
 }
+
+// ─── Propagation on prerelease branches ────────────────────────────────────
+
+const PRERELEASE_CONFIG: &str = r#"
+branches:
+  - main
+  - name: "test-*"
+    prerelease: true
+exclude:
+  - mono-root
+steps: []
+"#;
+
+#[test]
+fn test_prerelease_propagation_from_stable_base() {
+    // On a prerelease branch, a propagated dependent must get a prerelease
+    // version, never a stable one.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(
+        root,
+        &[
+            ("@test/core", "1.0.0", ""),
+            ("@test/app", "1.0.0", r#""@test/core": "^1.0.0""#),
+        ],
+        PRERELEASE_CONFIG,
+    );
+
+    git(root, &["checkout", "-b", "test-branch"]);
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: patch in core"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Exact per-package versions via the uncolored version-bump lines.
+    assert!(
+        stdout.contains("packages/core/package.json: 1.0.0 -> 1.0.1-test-branch.1"),
+        "Should release @test/core 1.0.1-test-branch.1:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("packages/app/package.json: 1.0.0 -> 1.0.1-test-branch.1"),
+        "Propagated @test/app must stay on the channel:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("dependency updated"),
+        "Should show propagation reason:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_prerelease_propagation_increments_existing_channel() {
+    // Regression test: a dependent already on the channel
+    // (10.267.0-test-tasks-tsmain-2.1) was propagated to a stable 10.267.1
+    // instead of incrementing the prerelease number.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(
+        root,
+        &[
+            ("@test/core", "1.0.0", ""),
+            ("@test/app", "1.0.0", r#""@test/core": "^1.0.0""#),
+        ],
+        PRERELEASE_CONFIG,
+    );
+
+    git(root, &["checkout", "-b", "test-branch"]);
+    // Both packages already have a release on this channel (semver-greater
+    // than the stable 1.0.0 so it is picked as the base version).
+    tag(root, "@test/core/v1.1.0-test-branch.1");
+    tag(root, "@test/app/v1.1.0-test-branch.1");
+
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: another fix in core"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        stdout.contains("packages/core/package.json: 1.1.0-test-branch.1 -> 1.1.0-test-branch.2"),
+        "Should release @test/core 1.1.0-test-branch.2:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("packages/app/package.json: 1.1.0-test-branch.1 -> 1.1.0-test-branch.2"),
+        "Propagated @test/app must increment on the channel:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("dependency updated"),
+        "Should show propagation reason:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("2 package(s) to release"),
+        "Should plan 2 releases:\n{}",
+        stdout
+    );
+    assert!(
+        !stdout.contains("1.1.1"),
+        "Propagated dependent must not get a stable bump on a prerelease branch:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_prerelease_transitive_propagation() {
+    // A -> B -> C chain on a prerelease branch: every propagated release
+    // must carry the channel prerelease.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(
+        root,
+        &[
+            ("@test/core", "1.0.0", ""),
+            ("@test/mid", "1.0.0", r#""@test/core": "^1.0.0""#),
+            ("@test/app", "1.0.0", r#""@test/mid": "^1.0.0""#),
+        ],
+        PRERELEASE_CONFIG,
+    );
+
+    git(root, &["checkout", "-b", "test-branch"]);
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: patch in core"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        stdout.contains("3 package(s) to release"),
+        "Should plan 3 releases:\n{}",
+        stdout
+    );
+    // All three packages start from stable 1.0.0, so all must land on the
+    // channel's first prerelease of the patch bump.
+    for short in ["core", "mid", "app"] {
+        assert!(
+            stdout.contains(&format!(
+                "packages/{}/package.json: 1.0.0 -> 1.0.1-test-branch.1",
+                short
+            )),
+            "packages/{} must land on the channel:\n{}",
+            short,
+            stdout
+        );
+    }
+}
+
+#[test]
+fn test_propagation_collision_skips_dependent_with_warning() {
+    // A propagated version already tagged on another branch must not abort
+    // the run: the dependent is skipped with a warning (also in dry runs).
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+
+    setup_monorepo(
+        root,
+        &[
+            ("@test/core", "1.0.0", ""),
+            ("@test/app", "1.0.0", r#""@test/core": "^1.0.0""#),
+        ],
+        BASE_CONFIG,
+    );
+
+    // Tag app's next patch version on a side branch so the tag exists but is
+    // unreachable from main.
+    git(root, &["checkout", "-b", "other"]);
+    fs::write(root.join("packages/app/src/index.ts"), "// other").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: change on other branch"]);
+    tag(root, "@test/app/v1.0.1");
+    git(root, &["checkout", "main"]);
+
+    fs::write(root.join("packages/core/src/index.ts"), "// core v2").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "fix: patch in core"]);
+
+    let output = super_release_bin()
+        .arg("--dry-run")
+        .arg("-C")
+        .arg(root.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {}", stderr);
+
+    assert!(
+        stdout.contains("packages/core/package.json: 1.0.0 -> 1.0.1"),
+        "Core's own release must survive the dependent's collision:\n{}",
+        stdout
+    );
+    assert!(
+        stdout.contains("1 package(s) to release"),
+        "The colliding dependent must be skipped, not released:\n{}",
+        stdout
+    );
+    assert!(
+        stderr.contains("Skipping cascade to '@test/app'"),
+        "Should warn about the skipped dependent:\n{}",
+        stderr
+    );
+}

@@ -159,6 +159,15 @@ impl TagIndex {
             .get(package_name)
             .is_some_and(|versions| versions.contains(version))
     }
+
+    /// Test-only: build an index with stable versions for collision checks and no per-package tags.
+    #[cfg(test)]
+    pub fn from_stable_versions(all_stable_versions: HashMap<String, HashSet<Version>>) -> Self {
+        TagIndex {
+            per_package: HashMap::new(),
+            all_stable_versions,
+        }
+    }
 }
 
 fn extract_version_from_tag(tag_name: &str, tag_re: &Option<regex::Regex>) -> Option<Version> {

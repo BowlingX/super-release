@@ -253,7 +253,22 @@ pub fn determine_releases(
 
     let mut releases: Vec<PackageRelease> = releases.into_iter().flatten().collect();
 
-    propagate_to_dependents(&mut releases, packages, &tag_infos, branch_ctx);
+    propagate_to_dependents(&mut releases, packages, &tag_infos, &tag_index, branch_ctx)?;
+
+    // Tripwire: a prerelease-configured branch must never plan a stable release,
+    // no matter which path produced the version.
+    if let Some(ref channel) = branch_ctx.prerelease {
+        for r in &releases {
+            if !prerelease_matches_channel(r.next_version.pre.as_str(), channel) {
+                anyhow::bail!(
+                    "Internal error: planned version {} for '{}' is not on prerelease channel '{}'",
+                    r.next_version,
+                    r.package_name,
+                    channel,
+                );
+            }
+        }
+    }
 
     Ok(releases)
 }
@@ -263,8 +278,9 @@ fn propagate_to_dependents(
     releases: &mut Vec<PackageRelease>,
     packages: &[Package],
     tag_infos: &[PkgTagInfo],
+    tag_index: &git::TagIndex,
     branch_ctx: &BranchContext,
-) {
+) -> Result<()> {
     let mut reverse_deps: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, pkg) in packages.iter().enumerate() {
         for dep_name in pkg.local_dependencies.keys() {
@@ -308,10 +324,19 @@ fn propagate_to_dependents(
 
             released.insert(dep_pkg.name.clone());
 
-            let mut next_version = tag_info.current_version.clone();
-            next_version.patch += 1;
-            next_version.pre = Prerelease::EMPTY;
-            next_version.build = semver::BuildMetadata::EMPTY;
+            let next_version = propagated_next_version(&tag_info.current_version, branch_ctx)?;
+
+            // Unlike a direct release, a propagated bump was never asked for by
+            // any commit — on a collision with a tag from another branch, skip
+            // the dependent with a warning instead of failing the whole run.
+            if next_version.pre.is_empty() && tag_index.version_exists(&dep_pkg.name, &next_version)
+            {
+                eprintln!(
+                    "  [version] Skipping cascade to '{}': version {} already exists as a tag on another branch (dependency chain: {})",
+                    dep_pkg.name, next_version, chain
+                );
+                continue;
+            }
 
             let next_chain = format!("{} -> {}", chain, dep_pkg.name);
 
@@ -328,6 +353,28 @@ fn propagate_to_dependents(
             queue.push_back((dep_pkg.name.clone(), next_chain));
         }
     }
+
+    Ok(())
+}
+
+/// Next version for a release triggered purely by a workspace dependency
+/// update (no direct commits). Dependency updates are patch-level by
+/// convention; on prerelease branches the result must stay on the channel —
+/// a prerelease-configured branch must never produce a stable version.
+fn propagated_next_version(current: &Version, branch_ctx: &BranchContext) -> Result<Version> {
+    if let Some(ref channel) = branch_ctx.prerelease {
+        // Already on this channel -> increment the prerelease number;
+        // stable base -> x.y.(z+1)-<channel>.1
+        let dep_commit = crate::commit::parse_conventional_commit(
+            "00000000",
+            "fix: workspace dependency update",
+        )
+        .expect("synthetic dependency-update commit is a valid conventional commit");
+        return calculate_prerelease_version(current, &[dep_commit], channel);
+    }
+
+    // Stable and maintenance branches: patch + 1, prerelease and build metadata stripped.
+    Ok(apply_bump(current, BumpLevel::Patch))
 }
 
 /// Find the oldest tag among all packages by comparing commit timestamps.
@@ -413,6 +460,8 @@ fn calculate_prerelease_version(
         let mut next = current.clone();
         next.pre = Prerelease::new(&format!("{}.{}", channel, next_num))
             .map_err(|e| anyhow::anyhow!("Invalid prerelease: {}", e))?;
+        // A released version must not inherit build metadata from its base.
+        next.build = semver::BuildMetadata::EMPTY;
         return Ok(next);
     }
 
@@ -542,6 +591,7 @@ pub fn apply_bump(version: &Version, bump: BumpLevel) -> Version {
 mod tests {
     use super::*;
     use crate::config::MaintenanceRange;
+    use crate::test_fixtures::make_pkg;
 
     #[test]
     fn test_apply_bump_patch() {
@@ -603,6 +653,14 @@ mod tests {
     #[test]
     fn test_prerelease_increment() {
         let current = Version::parse("2.0.0-beta.3").unwrap();
+        let commits = vec![make_commit("fix: something")];
+        let result = calculate_prerelease_version(&current, &commits, "beta").unwrap();
+        assert_eq!(result, Version::parse("2.0.0-beta.4").unwrap());
+    }
+
+    #[test]
+    fn test_prerelease_increment_strips_build_metadata() {
+        let current = Version::parse("2.0.0-beta.3+sha.abc").unwrap();
         let commits = vec![make_commit("fix: something")];
         let result = calculate_prerelease_version(&current, &commits, "beta").unwrap();
         assert_eq!(result, Version::parse("2.0.0-beta.4").unwrap());
@@ -914,5 +972,217 @@ mod tests {
 
     fn make_commit(message: &str) -> ConventionalCommit {
         crate::commit::parse_conventional_commit("abcd1234", message).unwrap()
+    }
+
+    fn prerelease_ctx(channel: &str) -> BranchContext {
+        BranchContext {
+            branch_name: channel.into(),
+            prerelease: Some(channel.into()),
+            channel: Some(channel.into()),
+            ..stable_ctx()
+        }
+    }
+
+    fn make_tag_info(version: &str) -> PkgTagInfo {
+        PkgTagInfo {
+            current_version: Version::parse(version).unwrap(),
+            cutoff_oid: None,
+            cutoff_tag: None,
+            cutoff_inclusive: false,
+        }
+    }
+
+    /// Seed for the propagation BFS; only the package name matters there.
+    fn seed_release(name: &str) -> PackageRelease {
+        PackageRelease {
+            package_name: name.into(),
+            current_version: Version::new(1, 0, 0),
+            next_version: Version::new(1, 0, 1),
+            bump: BumpLevel::Patch,
+            commits: Vec::new(),
+            is_root: false,
+            propagated_from: None,
+        }
+    }
+
+    fn empty_tag_index() -> git::TagIndex {
+        git::TagIndex::from_stable_versions(HashMap::new())
+    }
+
+    #[test]
+    fn test_propagate_prerelease_dependent_on_channel_increments() {
+        let packages = vec![
+            make_pkg("@test/assets", &[]),
+            make_pkg("@test/components", &["@test/assets"]),
+        ];
+        let tag_infos = vec![
+            make_tag_info("1.19.0-test-tasks-tsmain-2.1"),
+            make_tag_info("10.267.0-test-tasks-tsmain-2.1"),
+        ];
+        let mut releases = vec![seed_release("@test/assets")];
+        let ctx = prerelease_ctx("test-tasks-tsmain-2");
+
+        propagate_to_dependents(
+            &mut releases,
+            &packages,
+            &tag_infos,
+            &empty_tag_index(),
+            &ctx,
+        )
+        .unwrap();
+
+        let dep = releases
+            .iter()
+            .find(|r| r.package_name == "@test/components")
+            .expect("dependent should be released via propagation");
+        assert_eq!(
+            dep.next_version,
+            Version::parse("10.267.0-test-tasks-tsmain-2.2").unwrap()
+        );
+        assert_eq!(dep.bump, BumpLevel::Patch);
+        assert_eq!(dep.propagated_from.as_deref(), Some("@test/assets"));
+    }
+
+    #[test]
+    fn test_propagate_prerelease_dependent_from_stable_base() {
+        let packages = vec![
+            make_pkg("@test/core", &[]),
+            make_pkg("@test/app", &["@test/core"]),
+        ];
+        let tag_infos = vec![make_tag_info("1.0.0-beta.1"), make_tag_info("10.267.0")];
+        let mut releases = vec![seed_release("@test/core")];
+        let ctx = prerelease_ctx("beta");
+
+        propagate_to_dependents(
+            &mut releases,
+            &packages,
+            &tag_infos,
+            &empty_tag_index(),
+            &ctx,
+        )
+        .unwrap();
+
+        let dep = releases
+            .iter()
+            .find(|r| r.package_name == "@test/app")
+            .expect("dependent should be released via propagation");
+        assert_eq!(dep.next_version, Version::parse("10.267.1-beta.1").unwrap());
+    }
+
+    #[test]
+    fn test_propagate_prerelease_transitive_chain_never_stable() {
+        let packages = vec![
+            make_pkg("a", &[]),
+            make_pkg("b", &["a"]),
+            make_pkg("c", &["b"]),
+        ];
+        let tag_infos = vec![
+            make_tag_info("1.0.0-beta.1"),
+            make_tag_info("1.1.0-beta.2"),
+            make_tag_info("2.0.0"),
+        ];
+        let mut releases = vec![seed_release("a")];
+        let ctx = prerelease_ctx("beta");
+
+        propagate_to_dependents(
+            &mut releases,
+            &packages,
+            &tag_infos,
+            &empty_tag_index(),
+            &ctx,
+        )
+        .unwrap();
+
+        let b = releases.iter().find(|r| r.package_name == "b").unwrap();
+        assert_eq!(b.next_version, Version::parse("1.1.0-beta.3").unwrap());
+        let c = releases.iter().find(|r| r.package_name == "c").unwrap();
+        assert_eq!(c.next_version, Version::parse("2.0.1-beta.1").unwrap());
+        assert_eq!(c.propagated_from.as_deref(), Some("a -> b"));
+    }
+
+    #[test]
+    fn test_propagate_stable_branch_unchanged() {
+        let packages = vec![
+            make_pkg("@test/core", &[]),
+            make_pkg("@test/app", &["@test/core"]),
+        ];
+        let tag_infos = vec![make_tag_info("1.0.0"), make_tag_info("1.2.3+build.5")];
+        let mut releases = vec![seed_release("@test/core")];
+
+        propagate_to_dependents(
+            &mut releases,
+            &packages,
+            &tag_infos,
+            &empty_tag_index(),
+            &stable_ctx(),
+        )
+        .unwrap();
+
+        let dep = releases
+            .iter()
+            .find(|r| r.package_name == "@test/app")
+            .unwrap();
+        assert_eq!(dep.next_version, Version::parse("1.2.4").unwrap());
+        assert_eq!(dep.bump, BumpLevel::Patch);
+    }
+
+    #[test]
+    fn test_propagate_collision_skips_dependent_and_its_cascade() {
+        let packages = vec![
+            make_pkg("@test/core", &[]),
+            make_pkg("@test/app", &["@test/core"]),
+            make_pkg("@test/ui", &["@test/app"]),
+        ];
+        let tag_infos = vec![
+            make_tag_info("1.0.0"),
+            make_tag_info("1.0.0"),
+            make_tag_info("1.0.0"),
+        ];
+        let mut releases = vec![seed_release("@test/core")];
+
+        let mut stable: HashMap<String, HashSet<Version>> = HashMap::new();
+        stable.insert("@test/app".into(), HashSet::from([Version::new(1, 0, 1)]));
+        let tag_index = git::TagIndex::from_stable_versions(stable);
+
+        propagate_to_dependents(
+            &mut releases,
+            &packages,
+            &tag_infos,
+            &tag_index,
+            &stable_ctx(),
+        )
+        .unwrap();
+
+        // The colliding dependent is skipped, and nothing cascades past it.
+        assert_eq!(releases.len(), 1);
+        assert!(releases.iter().all(|r| r.package_name == "@test/core"));
+    }
+
+    #[test]
+    fn test_propagate_prerelease_wins_over_maintenance() {
+        let packages = vec![
+            make_pkg("@test/core", &[]),
+            make_pkg("@test/app", &["@test/core"]),
+        ];
+        let tag_infos = vec![make_tag_info("1.0.0"), make_tag_info("1.5.0")];
+        let mut releases = vec![seed_release("@test/core")];
+        let mut ctx = prerelease_ctx("beta");
+        ctx.maintenance = true;
+        ctx.maintenance_range = Some(MaintenanceRange::Major(1));
+
+        propagate_to_dependents(
+            &mut releases,
+            &packages,
+            &tag_infos,
+            &empty_tag_index(),
+            &ctx,
+        )
+        .unwrap();
+
+        let dep = releases
+            .iter()
+            .find(|r| r.package_name == "@test/app")
+            .unwrap();
+        assert_eq!(dep.next_version, Version::parse("1.5.1-beta.1").unwrap());
     }
 }
