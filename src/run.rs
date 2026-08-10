@@ -244,7 +244,9 @@ pub fn run_preview(
             packages: Vec::new(),
         });
 
-    let mut releases = version::determine_releases(repo, repo_root, packages, cfg, &branch_ctx)?;
+    // Previews check out PR heads, so HEAD is not the release branch's tip.
+    let mut releases =
+        version::determine_releases(repo, repo_root, packages, cfg, &branch_ctx, false)?;
     apply_branch_package_filter(&mut releases, &branch_ctx);
 
     // Only preview notes for packages a `changelog` step would cover on this branch, mirroring the per-step branch + package filtering.
@@ -333,12 +335,7 @@ pub fn apply_branch_package_filter(
         return 0;
     }
     let before = releases.len();
-    releases.retain(|r| {
-        branch_ctx
-            .packages
-            .iter()
-            .any(|pat| config::glob_match(pat, &r.package_name))
-    });
+    releases.retain(|r| branch_ctx.includes_package(&r.package_name));
     before - releases.len()
 }
 

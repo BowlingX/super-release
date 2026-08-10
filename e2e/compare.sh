@@ -491,6 +491,142 @@ BREAKING CHANGE: new API" --quiet
   compare "breaking on prerelease (2.0.0-beta.1)"
 }
 
+# ── Dotted prerelease channels & stale tags ──────────────────────────
+
+test_prerelease_dotted_channel_first() {
+  local dir
+  dir=$(setup_repo)
+
+  write_sr_config "$dir" '["main", {"name": "test-1.0", "prerelease": true}]'
+  write_our_config "$dir" 'branches:
+  - main
+  - name: "test-1.0"
+    prerelease: true
+steps: []'
+
+  git_commit "$dir" "chore: init"
+  git_tag "$dir" "v1.0.0"
+
+  git -C "$dir" checkout -b test-1.0 --quiet
+  git_commit "$dir" "feat: feature"
+
+  run_sr "$dir"
+  run_ours "$dir"
+  compare "dotted channel first prerelease (1.1.0-test-1.0.1)"
+}
+
+test_prerelease_dotted_channel_increment_divergence() {
+  # Documented divergence: node-semver splits the prerelease identifier at
+  # dots, so semantic-release cannot increment an existing dotted-channel
+  # release — it re-plans the version it already published (a real run then
+  # dies at `git tag` with "already exists"). super-release parses the counter
+  # against the full channel name and increments correctly.
+  local dir
+  dir=$(setup_repo)
+
+  write_sr_config "$dir" '["main", {"name": "test-1.0", "prerelease": true}]'
+  write_our_config "$dir" 'branches:
+  - main
+  - name: "test-1.0"
+    prerelease: true
+steps: []'
+
+  git_commit "$dir" "chore: init"
+  git_tag "$dir" "v1.0.0"
+  git_push "$dir"
+
+  git -C "$dir" checkout -b test-1.0 --quiet
+  git_commit "$dir" "feat: feature"
+  git_push "$dir"
+
+  # Real SR run to create the v1.1.0-test-1.0.1 tag + git notes.
+  (cd "$dir" && "$SR_BIN" --no-ci) > /dev/null 2>&1 || true
+  git_fetch_all "$dir"
+
+  git_commit "$dir" "fix: fix"
+
+  run_sr "$dir"
+  run_ours "$dir"
+
+  if [ "$SR_VERSION" = "1.1.0-test-1.0.1" ] && [ "$OUR_VERSION" = "1.1.0-test-1.0.2" ]; then
+    report_result "dotted channel increment (documented divergence)" "PASS" \
+      "sr=$SR_VERSION [re-plans released version], us=$OUR_VERSION [correct increment]"
+  else
+    report_result "dotted channel increment (documented divergence)" "FAIL" \
+      "$(printf "expected sr=1.1.0-test-1.0.1 us=1.1.0-test-1.0.2\nsemantic-release: %s\nsuper-release:    %s" "$SR_VERSION" "$OUR_VERSION")"
+  fi
+}
+
+test_prerelease_counterless_tag() {
+  # A hand-made counter-less channel tag (v1.1.0-beta): both tools land on
+  # 1.1.0-beta.1 — semantic-release by ignoring the note-less tag,
+  # super-release by treating it as counter 0 and incrementing.
+  local dir
+  dir=$(setup_repo)
+
+  write_sr_config "$dir" '["main", {"name": "beta", "prerelease": true}]'
+  write_our_config "$dir" 'branches:
+  - main
+  - name: beta
+    prerelease: beta
+steps: []'
+
+  git_commit "$dir" "chore: init"
+  git_tag "$dir" "v1.0.0"
+
+  git -C "$dir" checkout -b beta --quiet
+  git_commit "$dir" "feat: feature"
+  git_tag "$dir" "v1.1.0-beta"
+  git_commit "$dir" "fix: fix"
+
+  run_sr "$dir"
+  run_ours "$dir"
+  compare "counter-less channel tag (1.1.0-beta.1)"
+}
+
+test_prerelease_stale_tag_rebase_divergence() {
+  # Documented divergence: after a rebase leaves the channel tag unreachable,
+  # semantic-release silently re-plans the already-released version (dry run
+  # looks fine; a real run dies at `git tag` with a raw git error).
+  # super-release fails fast at plan time with remediation guidance.
+  local dir
+  dir=$(setup_repo)
+
+  write_sr_config "$dir" '["main", {"name": "beta", "prerelease": true}]'
+  write_our_config "$dir" 'branches:
+  - main
+  - name: beta
+    prerelease: beta
+steps: []'
+
+  git_commit "$dir" "chore: init"
+  git_tag "$dir" "v1.0.0"
+  git_push "$dir"
+
+  git -C "$dir" checkout -b beta --quiet
+  git_commit "$dir" "fix: pre-rebase fix"
+  git_push "$dir"
+
+  # Real SR run creates v1.0.1-beta.1; then the branch is recreated from main
+  # with the tag left behind (rebase/force-push).
+  (cd "$dir" && "$SR_BIN" --no-ci) > /dev/null 2>&1 || true
+  git_fetch_all "$dir"
+  git -C "$dir" reset --hard main --quiet
+  git_commit "$dir" "fix: post-rebase fix"
+  git -C "$dir" push origin beta --force --quiet 2>/dev/null || true
+
+  run_sr "$dir"
+  run_ours "$dir"
+
+  if [ "$SR_VERSION" = "1.0.1-beta.1" ] && echo "$OUR_LAST_OUTPUT" | grep -q "already exists as a tag but is not reachable"; then
+    report_result "stale channel tag after rebase (documented divergence)" "PASS" \
+      "sr=$SR_VERSION [re-plans; real run fails at git tag], us=fail-fast with guidance"
+  else
+    report_result "stale channel tag after rebase (documented divergence)" "FAIL" \
+      "$(printf "expected sr=1.0.1-beta.1 and our fail-fast\nsemantic-release: %s\nsuper-release output:\n%s" "$SR_VERSION" "$(echo "$OUR_LAST_OUTPUT" | tail -5)")"
+  fi
+}
+
 test_maintenance_fix() {
   local dir
   dir=$(setup_repo)
@@ -846,6 +982,10 @@ main() {
     test_prerelease_increment
     test_prerelease_breaking
     test_prerelease_multiple_increments
+    test_prerelease_dotted_channel_first
+    test_prerelease_dotted_channel_increment_divergence
+    test_prerelease_counterless_tag
+    test_prerelease_stale_tag_rebase_divergence
     test_maintenance_fix
     test_maintenance_feat
     test_maintenance_breaking_capped
