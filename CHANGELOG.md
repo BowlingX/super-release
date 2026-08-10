@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.12.2] - 2026-08-10
+
+### 🐛 Bug Fixes
+
+- Fixed propagation logic error for prerelease branches. dependent package now properly use the prerelease channel name
 ## [1.12.1] - 2026-07-28
 
 ### 🐛 Bug Fixes
