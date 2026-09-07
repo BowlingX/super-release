@@ -21,6 +21,9 @@ inputs:
   package:
     description: Filter to a specific package.
     required: false
+  base:
+    description: 'Base branch to evaluate the preview against (default: the PR base branch).'
+    required: false
   working-directory:
     description: 'Repository root to operate on (default: the checkout root).'
     required: false
@@ -40,6 +43,6 @@ runs:
     INPUT_DRY_RUN: ${{ inputs.dry-run }}
     INPUT_PREVIEW: ${{ inputs.preview }}
     INPUT_PACKAGE: ${{ inputs.package }}
+    INPUT_BASE: ${{ inputs.base }}
     INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
     INPUT_DANGEROUSLY_SKIP_CONFIG_CHECK: ${{ inputs.dangerously-skip-config-check }}
-    INPUT_ARGS: ${{ inputs.args }}

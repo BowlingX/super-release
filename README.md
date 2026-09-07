@@ -89,6 +89,19 @@ version and rendered release notes (needs `pull-requests: write`):
     GITHUB_TOKEN: ${{ github.token }}
 ```
 
+The preview is evaluated against the PR's base branch. When PRs target an
+integration branch (say `develop`) that is later merged into the release branch,
+set `base` to the branch the release will actually run from:
+
+```yaml
+- uses: bowlingx/super-release@v1
+  with:
+    preview: true
+    base: main
+  env:
+    GITHUB_TOKEN: ${{ github.token }}
+```
+
 ### Inputs
 
 | Input                           | Default               | Description                                            |
@@ -98,6 +111,7 @@ version and rendered release notes (needs `pull-requests: write`):
 | `preview`                       | `false`               | Post/update a PR preview comment instead of releasing. |
 | `config`                        |                       | Path to the config file (default `.release.yaml`).     |
 | `package`                       |                       | Filter to a specific package.                          |
+| `base`                          |                       | Base branch for `preview` (default: the PR base).      |
 | `working-directory`             |                       | Repository root to operate on.                         |
 | `dangerously-skip-config-check` | `false`               | Skip config-schema validation.                         |
 | `args`                          |                       | Extra raw CLI flags (escape hatch).                    |

@@ -31,15 +31,13 @@ if [ "$(git -C "$WS" rev-parse --is-shallow-repository 2>/dev/null || echo false
   echo "::warning::super-release needs full history and tags; check out with actions/checkout fetch-depth: 0"
 fi
 
-# Append input-derived flags to any args already passed (e.g. via `docker run`).
+# Append input-derived flags to any args already passed
 [ "${INPUT_DRY_RUN:-}" = "true" ] && set -- "$@" --dry-run
 [ "${INPUT_PREVIEW:-}" = "true" ] && set -- "$@" --preview
 [ "${INPUT_DANGEROUSLY_SKIP_CONFIG_CHECK:-}" = "true" ] && set -- "$@" --dangerously-skip-config-check
 [ -n "${INPUT_CONFIG:-}" ] && set -- "$@" --config "$INPUT_CONFIG"
 [ -n "${INPUT_PACKAGE:-}" ] && set -- "$@" --package "$INPUT_PACKAGE"
+[ -n "${INPUT_BASE:-}" ] && set -- "$@" --base "$INPUT_BASE"
 [ -n "${INPUT_WORKING_DIRECTORY:-}" ] && set -- "$@" -C "$INPUT_WORKING_DIRECTORY"
-# Additional args
-# shellcheck disable=SC2086
-[ -n "${INPUT_ARGS:-}" ] && set -- "$@" $INPUT_ARGS
 
 exec super-release "$@"
