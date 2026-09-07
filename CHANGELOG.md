@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.13.0] - 2026-09-07
+
+### 🚀 Features
+
+- Allow to set the `base` to simulate preview's against
 ## [1.12.2] - 2026-08-10
 
 ### 🐛 Bug Fixes
