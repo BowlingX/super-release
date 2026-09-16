@@ -118,6 +118,7 @@ fn run_for_releases(
                     step_name: &step_name,
                 },
             )
+            .map_err(subprocess::CommandFailure::report)
         })
         .collect();
 

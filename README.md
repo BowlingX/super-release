@@ -555,6 +555,9 @@ The git step:
 
 Tags are idempotent -- existing tags are skipped. The npm step checks the registry before publishing (`npm view`) and
 skips versions that already exist. Non-404 errors (auth, network) abort the release to prevent partial publishes.
+A publish the registry rejects as already published (`cannot publish over the previously published versions`) is also
+treated as skipped; this is how already-published private packages are detected when `npm view` has no read access,
+for example with trusted publishing and no `NODE_AUTH_TOKEN`.
 
 ## Monorepo Support
 

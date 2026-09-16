@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use console::style;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::io::{BufRead, BufReader};
@@ -34,14 +33,55 @@ pub struct RunOptions<'a> {
     pub step_name: &'a str,
 }
 
-/// Run a command, streaming output live: a per-task spinner on TTY, prefixed lines in CI, and the last 20 lines on error.
-pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
+/// Failed run of a command, carrying the captured output so callers can classify the failure before reporting it.
+///
+/// Deliberately not `std::error::Error`: `?` will not compile on it, so every caller must either classify
+/// the failure or call [`CommandFailure::report`], which is the only place the output tail gets printed.
+#[derive(Debug)]
+pub struct CommandFailure {
+    /// `[step] label`, used as the header of the printed output tail.
+    context: String,
+    message: String,
+    pub output: Vec<String>,
+}
+
+impl CommandFailure {
+    /// Prints the last 20 output lines on a TTY (CI already streamed every line) and converts into an error.
+    /// The message itself is left to the returned error so callers do not print it twice.
+    pub fn report(self) -> anyhow::Error {
+        if !self.output.is_empty() && console::Term::stdout().is_term() {
+            let tail = &self.output[self.output.len().saturating_sub(20)..];
+            let _ = MULTI.println(format!(
+                "  {}\n{}",
+                style(format!("{} output:", self.context)).red(),
+                tail.iter()
+                    .map(|l| format!("    {}", style(l).dim()))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ));
+        }
+        anyhow::Error::msg(self.message)
+    }
+}
+
+/// Run a command, streaming output live: a per-task spinner on TTY, prefixed lines in CI.
+pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<(), CommandFailure> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().with_context(|| {
-        format!(
-            "[{}] Failed to spawn command for {}",
-            opts.step_name, opts.label
+    let context = format!("[{}] {}", opts.step_name, opts.label);
+    let failure = |message: String, output: Vec<String>| CommandFailure {
+        context: context.clone(),
+        message,
+        output,
+    };
+
+    let mut child = cmd.spawn().map_err(|e| {
+        failure(
+            format!(
+                "[{}] Failed to spawn command for {}: {}",
+                opts.step_name, opts.label, e
+            ),
+            Vec::new(),
         )
     })?;
 
@@ -93,35 +133,25 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<()> {
         s.finish_and_clear();
     }
 
-    let status = child.wait()?;
-    let all_output = all_output.lock().unwrap();
+    let status = child.wait().map_err(|e| {
+        failure(
+            format!(
+                "[{}] Failed to wait for {}: {}",
+                opts.step_name, opts.label, e
+            ),
+            Vec::new(),
+        )
+    })?;
+    let output = std::mem::take(&mut *all_output.lock().unwrap());
 
     if !status.success() {
-        if is_tty {
-            let tail: Vec<&str> = all_output
-                .iter()
-                .map(|s| s.as_str())
-                .rev()
-                .take(20)
-                .collect();
-            let tail: Vec<&str> = tail.into_iter().rev().collect();
-            MULTI.println(format!(
-                "  [{}] {} output:\n{}",
-                style(opts.step_name).red(),
-                opts.label,
-                tail.iter()
-                    .map(|l| format!("    {}", style(l).dim()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            ))?;
-        }
-
-        anyhow::bail!(
-            "[{}] Command failed for {} (exit code: {})",
-            opts.step_name,
-            opts.label,
-            status
-        );
+        return Err(failure(
+            format!(
+                "[{}] Command failed for {} (exit code: {})",
+                opts.step_name, opts.label, status
+            ),
+            output,
+        ));
     }
 
     Ok(())

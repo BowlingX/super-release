@@ -1,27 +1,10 @@
-use assert_cmd::Command;
+mod common;
+
+use common::{git, super_release_bin};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 use tempfile::TempDir;
-
-fn git(dir: &Path, args: &[&str]) {
-    let output = process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    if !output.status.success() {
-        panic!(
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-fn super_release_bin() -> Command {
-    Command::cargo_bin("super-release").unwrap()
-}
 
 fn setup_single_package(root: &Path) {
     git(root, &["init", "-b", "main"]);
@@ -821,321 +804,200 @@ fn test_dry_run_is_readonly() {
 }
 
 // ──────────────────────────────────────────────────────────────
-// npm publish skip — fake npm that reports version as published
+// npm publish with a fake `npm` on PATH
 // ──────────────────────────────────────────────────────────────
 
-#[test]
-fn test_npm_skips_already_published_version() {
-    let dir = TempDir::new().unwrap();
-    let root = dir.path();
+#[cfg(unix)]
+mod fake_npm {
+    use super::*;
+    use std::borrow::Cow;
 
-    git(root, &["init", "-b", "main"]);
-    git(root, &["config", "user.email", "test@test.com"]);
-    git(root, &["config", "user.name", "Test"]);
+    struct FakeNpmRun {
+        _dir: TempDir,
+        root: PathBuf,
+        publish_marker: PathBuf,
+        output: process::Output,
+    }
 
-    fs::write(
-        root.join("package.json"),
-        r#"{"name": "my-app", "version": "1.0.0"}"#,
-    )
-    .unwrap();
-    fs::write(root.join("index.js"), "// v1").unwrap();
+    impl FakeNpmRun {
+        fn combined_output(&self) -> String {
+            format!(
+                "stdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&self.output.stdout),
+                String::from_utf8_lossy(&self.output.stderr)
+            )
+        }
 
-    fs::write(
-        root.join(".release.yaml"),
-        r#"
-branches: [main]
-steps:
-  - name: npm
-"#,
-    )
-    .unwrap();
+        fn assert_success(&self) -> Cow<'_, str> {
+            assert!(
+                self.output.status.success(),
+                "Should succeed:\n{}",
+                self.combined_output()
+            );
+            String::from_utf8_lossy(&self.output.stdout)
+        }
+    }
 
-    git(root, &["add", "."]);
-    git(root, &["commit", "-m", "chore: init"]);
-    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
+    /// Releases `setup_single_package` through the npm step with a fake `npm` whose `view` and
+    /// `publish` subcommands run the given shell snippets; `publish` always touches a marker first.
+    fn release_with_fake_npm(view_script: &str, publish_script: &str) -> FakeNpmRun {
+        use std::os::unix::fs::PermissionsExt;
 
-    fs::write(root.join("index.js"), "// v1.1").unwrap();
-    git(root, &["add", "."]);
-    git(root, &["commit", "-m", "feat: new feature"]);
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("work");
+        fs::create_dir_all(&root).unwrap();
+        setup_single_package(&root);
+        fs::write(
+            root.join(".release.yaml"),
+            r#"
+    branches:
+      - main
+    steps:
+      - name: npm
+    "#,
+        )
+        .unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "chore: use npm step"]);
 
-    // Create a fake `npm` script that:
-    // - `npm view my-app@1.1.0 version` → prints "1.1.0" (already published)
-    // - `npm publish ...` → writes a marker file and fails (proves it was called)
-    // - `npm --version` → prints "10.0.0" (verify passes)
-    let fake_bin = dir.path().join("fake-bin");
-    fs::create_dir_all(&fake_bin).unwrap();
-    let publish_marker = dir.path().join("publish-was-called");
-
-    let fake_npm = fake_bin.join("npm");
-    #[cfg(unix)]
-    {
+        let fake_bin = dir.path().join("fake-bin");
+        fs::create_dir_all(&fake_bin).unwrap();
+        let publish_marker = dir.path().join("publish-was-called");
+        let fake_npm = fake_bin.join("npm");
         fs::write(
             &fake_npm,
             format!(
                 r#"#!/bin/sh
-if [ "$1" = "view" ]; then
-    echo "1.1.0"
-    exit 0
-elif [ "$1" = "--version" ]; then
-    echo "10.0.0"
-    exit 0
-elif [ "$1" = "publish" ]; then
-    touch "{}"
-    echo "ERROR: publish should not be called" >&2
-    exit 1
-fi
-"#,
-                publish_marker.display()
+    if [ "$1" = "view" ]; then
+    {view_script}
+    elif [ "$1" = "--version" ]; then
+        echo "10.0.0"
+        exit 0
+    elif [ "$1" = "publish" ]; then
+        touch "{marker}"
+    {publish_script}
+    fi
+    "#,
+                marker = publish_marker.display()
             ),
         )
         .unwrap();
-
-        use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&fake_npm, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let path = format!(
+            "{}:{}",
+            fake_bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let output = super_release_bin()
+            .arg("-C")
+            .arg(root.to_str().unwrap())
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+
+        FakeNpmRun {
+            _dir: dir,
+            root,
+            publish_marker,
+            output,
+        }
     }
 
-    #[cfg(not(unix))]
-    {
-        // Skip on non-unix (can't easily fake npm on Windows)
-        return;
+    const VIEW_PUBLISHED: &str = r#"    echo "1.1.0"
+        exit 0"#;
+
+    const VIEW_NOT_FOUND: &str = r#"    echo "npm error code E404" >&2
+        exit 1"#;
+
+    const VIEW_UNAUTHORIZED: &str = r#"    echo "npm error code E401" >&2
+        echo "npm error Unable to authenticate" >&2
+        exit 1"#;
+
+    const PUBLISH_OK: &str = r#"    echo "+ my-app@1.1.0"
+        exit 0"#;
+
+    const PUBLISH_UNEXPECTED: &str = r#"    echo "ERROR: publish should not be called" >&2
+        exit 1"#;
+
+    const PUBLISH_CONFLICT: &str = r#"    echo "npm error code E403" >&2
+        echo "npm error 403 403 Forbidden - PUT https://registry.npmjs.org/my-app - You cannot publish over the previously published versions: 1.1.0." >&2
+        exit 1"#;
+
+    #[test]
+    fn test_npm_skips_already_published_version() {
+        let run = release_with_fake_npm(VIEW_PUBLISHED, PUBLISH_UNEXPECTED);
+
+        let stdout = run.assert_success();
+        assert!(
+            stdout.contains("already published, skipping"),
+            "Should skip publish:\n{}",
+            stdout
+        );
+        assert!(
+            !run.publish_marker.exists(),
+            "npm publish should NOT have been called when version is already published"
+        );
     }
 
-    // Put fake-bin first in PATH
-    let path = format!(
-        "{}:{}",
-        fake_bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    #[test]
+    fn test_npm_publish_called_when_not_published() {
+        let run = release_with_fake_npm(VIEW_NOT_FOUND, PUBLISH_OK);
 
-    let output = super_release_bin()
-        .arg("-C")
-        .arg(root.to_str().unwrap())
-        .env("PATH", &path)
-        .output()
-        .unwrap();
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "Should succeed:\nstdout: {}\nstderr: {}",
-        stdout,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        stdout.contains("already published, skipping"),
-        "Should skip publish:\n{}",
-        stdout
-    );
-    // Verify publish was NOT called
-    assert!(
-        !publish_marker.exists(),
-        "npm publish should NOT have been called when version is already published"
-    );
-}
-
-#[test]
-fn test_npm_publish_called_when_not_published() {
-    let dir = TempDir::new().unwrap();
-    let root = dir.path();
-
-    git(root, &["init", "-b", "main"]);
-    git(root, &["config", "user.email", "test@test.com"]);
-    git(root, &["config", "user.name", "Test"]);
-
-    fs::write(
-        root.join("package.json"),
-        r#"{"name": "my-app", "version": "1.0.0"}"#,
-    )
-    .unwrap();
-    fs::write(root.join("index.js"), "// v1").unwrap();
-
-    fs::write(
-        root.join(".release.yaml"),
-        r#"
-branches: [main]
-steps:
-  - name: npm
-"#,
-    )
-    .unwrap();
-
-    git(root, &["add", "."]);
-    git(root, &["commit", "-m", "chore: init"]);
-    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
-
-    fs::write(root.join("index.js"), "// v1.1").unwrap();
-    git(root, &["add", "."]);
-    git(root, &["commit", "-m", "feat: new feature"]);
-
-    let fake_bin = dir.path().join("fake-bin");
-    fs::create_dir_all(&fake_bin).unwrap();
-    let publish_marker = dir.path().join("publish-was-called");
-
-    let fake_npm = fake_bin.join("npm");
-    #[cfg(unix)]
-    {
-        // npm view returns 404 (not published), npm publish succeeds and writes marker
-        fs::write(
-            &fake_npm,
-            format!(
-                r#"#!/bin/sh
-if [ "$1" = "view" ]; then
-    echo "npm error code E404" >&2
-    exit 1
-elif [ "$1" = "--version" ]; then
-    echo "10.0.0"
-    exit 0
-elif [ "$1" = "publish" ]; then
-    touch "{}"
-    echo "+ my-app@1.1.0"
-    exit 0
-fi
-"#,
-                publish_marker.display()
-            ),
-        )
-        .unwrap();
-
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&fake_npm, fs::Permissions::from_mode(0o755)).unwrap();
+        let stdout = run.assert_success();
+        assert!(
+            run.publish_marker.exists(),
+            "npm publish SHOULD have been called when version is not published:\n{}",
+            stdout
+        );
     }
 
-    #[cfg(not(unix))]
-    {
-        return;
+    #[test]
+    fn test_npm_publish_conflict_is_treated_as_already_published() {
+        let run = release_with_fake_npm(VIEW_NOT_FOUND, PUBLISH_CONFLICT);
+
+        let stdout = run.assert_success();
+        assert!(
+            stdout.contains("already published, skipping"),
+            "Should report the version as already published:\n{}",
+            stdout
+        );
+        assert!(
+            run.publish_marker.exists(),
+            "npm publish should have been attempted:\n{}",
+            stdout
+        );
+        let tags = process::Command::new("git")
+            .args(["tag", "-l", "v1.1.0"])
+            .current_dir(&run.root)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&tags.stdout).trim(),
+            "v1.1.0",
+            "Release should still be tagged:\n{}",
+            run.combined_output()
+        );
     }
 
-    let path = format!(
-        "{}:{}",
-        fake_bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
+    #[test]
+    fn test_npm_registry_auth_error_blocks_publish() {
+        let run = release_with_fake_npm(VIEW_UNAUTHORIZED, PUBLISH_OK);
 
-    let output = super_release_bin()
-        .arg("-C")
-        .arg(root.to_str().unwrap())
-        .env("PATH", &path)
-        .output()
-        .unwrap();
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        output.status.success(),
-        "Should succeed:\nstdout: {}\nstderr: {}",
-        stdout,
-        String::from_utf8_lossy(&output.stderr)
-    );
-    // Verify publish WAS called
-    assert!(
-        publish_marker.exists(),
-        "npm publish SHOULD have been called when version is not published:\n{}",
-        stdout
-    );
-}
-
-#[test]
-fn test_npm_registry_auth_error_blocks_publish() {
-    let dir = TempDir::new().unwrap();
-    let root = dir.path();
-
-    git(root, &["init", "-b", "main"]);
-    git(root, &["config", "user.email", "test@test.com"]);
-    git(root, &["config", "user.name", "Test"]);
-
-    fs::write(
-        root.join("package.json"),
-        r#"{"name": "my-app", "version": "1.0.0"}"#,
-    )
-    .unwrap();
-    fs::write(root.join("index.js"), "// v1").unwrap();
-
-    fs::write(
-        root.join(".release.yaml"),
-        r#"
-branches: [main]
-steps:
-  - name: npm
-"#,
-    )
-    .unwrap();
-
-    git(root, &["add", "."]);
-    git(root, &["commit", "-m", "chore: init"]);
-    git(root, &["tag", "-a", "v1.0.0", "-m", "v1.0.0"]);
-
-    fs::write(root.join("index.js"), "// v1.1").unwrap();
-    git(root, &["add", "."]);
-    git(root, &["commit", "-m", "feat: new feature"]);
-
-    let fake_bin = dir.path().join("fake-bin");
-    fs::create_dir_all(&fake_bin).unwrap();
-    let publish_marker = dir.path().join("publish-was-called");
-
-    let fake_npm = fake_bin.join("npm");
-    #[cfg(unix)]
-    {
-        // npm view returns E401 (auth error) — should block, not proceed to publish
-        fs::write(
-            &fake_npm,
-            format!(
-                r#"#!/bin/sh
-if [ "$1" = "view" ]; then
-    echo "npm error code E401" >&2
-    echo "npm error Unable to authenticate" >&2
-    exit 1
-elif [ "$1" = "--version" ]; then
-    echo "10.0.0"
-    exit 0
-elif [ "$1" = "publish" ]; then
-    touch "{}"
-    exit 0
-fi
-"#,
-                publish_marker.display()
-            ),
-        )
-        .unwrap();
-
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&fake_npm, fs::Permissions::from_mode(0o755)).unwrap();
+        let combined = run.combined_output();
+        assert!(
+            !run.output.status.success(),
+            "Should fail on auth error:\n{}",
+            combined
+        );
+        assert!(
+            !run.publish_marker.exists(),
+            "npm publish should NOT be called on auth error"
+        );
+        assert!(
+            combined.contains("Registry check failed") || combined.contains("E401"),
+            "Should mention registry check failure:\n{}",
+            combined
+        );
     }
-
-    #[cfg(not(unix))]
-    {
-        return;
-    }
-
-    let path = format!(
-        "{}:{}",
-        fake_bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-
-    let output = super_release_bin()
-        .arg("-C")
-        .arg(root.to_str().unwrap())
-        .env("PATH", &path)
-        .output()
-        .unwrap();
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    // Should FAIL — auth error is not a 404
-    assert!(
-        !output.status.success(),
-        "Should fail on auth error:\nstdout: {}\nstderr: {}",
-        String::from_utf8_lossy(&output.stdout),
-        stderr
-    );
-    // Publish should NOT have been called
-    assert!(
-        !publish_marker.exists(),
-        "npm publish should NOT be called on auth error"
-    );
-    // Error message should mention the registry check failure
-    let combined = format!("{}\n{}", String::from_utf8_lossy(&output.stdout), stderr);
-    assert!(
-        combined.contains("Registry check failed") || combined.contains("E401"),
-        "Should mention registry check failure:\n{}",
-        combined
-    );
 }
