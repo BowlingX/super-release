@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.14.0] - 2026-09-16
+
+### 🚀 Features
+
+- Make (npm) release idempotent in cases of registry rejects with an already published version (#52)
 ## [1.13.0] - 2026-09-07
 
 ### 🚀 Features
