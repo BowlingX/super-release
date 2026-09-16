@@ -262,13 +262,23 @@ fn publish_one(
         "    {}",
         console::style(format!("in {}", pkg_dir.display())).dim()
     );
-    subprocess::run_command(
+    match subprocess::run_command(
         cmd,
         &subprocess::RunOptions {
             label: &label,
             step_name: &pm_name,
         },
-    )
+    ) {
+        Ok(()) => Ok(()),
+        Err(failure) if is_publish_conflict(&failure.output) => {
+            println!(
+                "  [{}] {} already published, skipping (registry rejected the republish)",
+                pm_name, label
+            );
+            Ok(())
+        }
+        Err(failure) => Err(failure.report()),
+    }
 }
 
 fn format_view_command(name: &str, version: &str, registry: Option<&str>) -> String {
@@ -280,9 +290,18 @@ fn format_view_command(name: &str, version: &str, registry: Option<&str>) -> Str
     subprocess::format_command(&cmd)
 }
 
+/// Whether a failed `publish` was rejected because the version already exists on the registry.
+/// Covers npm's `EPUBLISHCONFLICT` and the 403 wording npm and pnpm relay from the registry.
+fn is_publish_conflict(output: &[String]) -> bool {
+    output.iter().any(|line| {
+        line.contains("previously published version") || line.contains("EPUBLISHCONFLICT")
+    })
+}
+
 enum VersionCheckResult {
     Published(String),
-    /// 404: version not found (safe to publish).
+    /// 404: version not found, or a private package the caller cannot read
+    /// (in which case the publish itself decides, see [`is_publish_conflict`]).
     NotFound(String),
     /// Registry error (auth, network, etc.) — should not proceed.
     Error(String),
@@ -359,6 +378,28 @@ fn dependency_levels(
 mod tests {
     use super::*;
     use crate::test_fixtures::make_pkg;
+
+    #[test]
+    fn test_is_publish_conflict() {
+        let lines = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(is_publish_conflict(&lines(&[
+            "npm error code E403",
+            "npm error 403 403 Forbidden - PUT https://registry.npmjs.org/my-app - You cannot publish over the previously published versions: 1.1.0.",
+        ])));
+        assert!(is_publish_conflict(&lines(&[
+            "Error: ERR_PNPM_FAILED_TO_PUBLISH",
+            "  × Failed to publish package @scope/pkg@0.2.0 (status 403 Forbidden):",
+            "  │ You cannot publish over the previously published versions: 0.2.0.",
+        ])));
+        assert!(is_publish_conflict(&lines(&[
+            "npm error code EPUBLISHCONFLICT"
+        ])));
+        assert!(!is_publish_conflict(&lines(&[
+            "  × Failed to publish package @scope/pkg@0.2.0 (status 404 Not Found):",
+            "  │ {\"error\":\"Not found\"}",
+        ])));
+        assert!(!is_publish_conflict(&lines(&["npm error code E401"])));
+    }
 
     #[test]
     fn test_dependency_levels() {
