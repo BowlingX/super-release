@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.15.0] - 2026-10-03
+
+### 🚀 Features
+
+- Switched to GraphQL-API to pull attributions, added missing hint(s) for dependency bump only changelogs
 ## [1.14.1] - 2026-10-03
 
 ### 🐛 Bug Fixes
