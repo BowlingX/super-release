@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.14.1] - 2026-10-03
+
+### 🐛 Bug Fixes
+
+- Fetch gh metadata once per release, forward error codes properly
 ## [1.14.0] - 2026-09-16
 
 ### 🚀 Features
