@@ -1,12 +1,16 @@
 mod comments;
 
 use anyhow::{Context, Result};
+use git_cliff_core::remote::RemoteMetadata;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 use super::{ReleaseContext, Step, StepConfig, StepContext, parse_options};
 use crate::forge::{self, Forge, github::GitHubForge};
-use crate::notes::{GithubContext, generate_release_notes, generate_release_notes_with_github};
+use crate::notes::{
+    GithubContext, fetch_github_metadata, generate_release_notes,
+    generate_release_notes_with_github,
+};
 use crate::package::Package;
 use crate::version::PackageRelease;
 use comments::build_success_comments;
@@ -172,7 +176,7 @@ impl Step for GithubStep {
             .clone()
             .or_else(|| forge.api_base_uri(&gh_repo));
 
-        // Resolved once; runs outside any tokio runtime because git-cliff blocks on its own.
+        // Resolved once for all releases.
         let web_url = gh_repo.web_url();
         let gh = GithubContext {
             owner: &gh_repo.owner,
@@ -192,9 +196,27 @@ impl Step for GithubStep {
             opts.template.as_deref(),
             opts.template_file.as_deref(),
         )?;
+        let metadata = fetch_github_metadata(&gh)
+            .inspect_err(|e| {
+                eprintln!(
+                    "  [github] Warning: could not fetch GitHub metadata, release notes credit no contributors or PRs: {:#}",
+                    e
+                );
+            })
+            .ok();
         let plans: Vec<_> = releases
             .iter()
-            .map(|r| build_plan(ctx, &opts, r, &assets, &gh, template.as_deref()))
+            .map(|r| {
+                build_plan(
+                    ctx,
+                    &opts,
+                    r,
+                    &assets,
+                    &gh,
+                    metadata.as_ref(),
+                    template.as_deref(),
+                )
+            })
             .collect();
 
         let results = forge.publish_releases(&token, base_uri.as_deref(), &gh_repo, &plans)?;
@@ -227,6 +249,7 @@ fn build_plan(
     release: &PackageRelease,
     assets: &[PathBuf],
     gh: &GithubContext,
+    metadata: Option<&RemoteMetadata>,
     template: Option<&str>,
 ) -> forge::ReleasePlan {
     let tag = ctx.cfg.format_tag(
@@ -249,16 +272,22 @@ fn build_plan(
     let prerelease = opts
         .prerelease
         .unwrap_or_else(|| ctx.branch.prerelease.is_some());
-    // Enrich with contributors/PR links; on a template error (both the online
-    // and offline render failed), fall back to the default plain notes.
-    let body = generate_release_notes_with_github(release, gh, &tag, &previous_tag, template)
-        .unwrap_or_else(|e| {
-            eprintln!(
-                "  [github] Warning: could not render release notes for {}, using plain notes: {}",
-                tag, e
-            );
-            generate_release_notes(release, None).unwrap_or_default()
-        });
+    // Enrich with contributors/PR links; on a template error, fall back to the default plain notes.
+    let body = generate_release_notes_with_github(
+        release,
+        gh,
+        metadata,
+        &tag,
+        &previous_tag,
+        template,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!(
+            "  [github] Warning: could not render release notes for {}, using plain notes: {}",
+            tag, e
+        );
+        generate_release_notes(release, None).unwrap_or_default()
+    });
 
     forge::ReleasePlan {
         tag,

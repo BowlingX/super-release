@@ -33,7 +33,7 @@ jsonc-parser = { version = "0.33", features = ["serde"] }
 jsonschema = { version = "0.47", default-features = false, features = ["resolve-file"] }
 serde-saphyr = "0.0.29"
 octocrab = "0.54"
-tokio = { version = "1.52.3", features = ["rt"] }
+tokio = { version = "1.52.3", features = ["rt", "macros"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 bytes = "1.12.1"
 glob = "0.3.3"

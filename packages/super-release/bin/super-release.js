@@ -2,7 +2,7 @@
 
 import { spawnSync, execFileSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { arch, platform } from 'node:os'
+import { arch, constants, platform } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import pkg from '../package.json' with { type: 'json' }
 
@@ -47,6 +47,11 @@ const result = spawnSync(getBinaryPath(), process.argv.slice(2), {
 
 if (result.error) {
   console.error(result.error)
+}
+
+if (result.signal) {
+  console.error(`super-release was terminated by ${result.signal}`)
+  process.exit(128 + (constants.signals[result.signal] ?? 0))
 }
 
 process.exit(result.status ?? 1)

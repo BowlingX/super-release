@@ -6,8 +6,10 @@ use std::sync::LazyLock;
 
 use git_cliff_core::changelog::Changelog;
 use git_cliff_core::commit::Commit as CliffCommit;
-use git_cliff_core::config::Config as CliffConfig;
+use git_cliff_core::config::{Config as CliffConfig, Remote};
 use git_cliff_core::release::Release as CliffRelease;
+use git_cliff_core::remote::RemoteMetadata;
+use git_cliff_core::remote::github::GitHubClient;
 
 use crate::commit::ConventionalCommit;
 use crate::version::PackageRelease;
@@ -21,7 +23,7 @@ static CLIFF_CONFIG: LazyLock<CliffConfig> =
 /// skipped by the commit parsers (e.g. `chore(deps)` bumps).
 const GITHUB_GROUPED_BODY: &str = include_str!("../templates/github-release-body.tera");
 
-/// Parsed once; the remote/token is set on the clone per release.
+/// Parsed once; the GitHub remote is set on the clone per release.
 static GITHUB_CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
     let mut config: CliffConfig = "".parse().expect("Failed to load git-cliff default config");
     config.changelog.body = GITHUB_GROUPED_BODY.to_string();
@@ -80,53 +82,58 @@ pub struct GithubContext<'a> {
     pub web_url: &'a str,
 }
 
-/// `tag`/`previous_tag` are the real tag names, needed for a correct compare link
-/// with prefixed tags.
+impl GithubContext<'_> {
+    fn remote(&self) -> Remote {
+        Remote {
+            owner: self.owner.to_string(),
+            repo: self.repo.to_string(),
+            token: Some(secrecy::SecretString::new(self.token.to_string())),
+            api_url: self.api_url.map(String::from),
+            ..Default::default()
+        }
+    }
+}
+
+/// Fetches the repo's commits and closed pull requests once, so every release in a
+/// run is attributed from the same data instead of each refetching both lists.
 ///
-/// Must NOT be called from within a tokio runtime: `Changelog::new` spins up its
-/// own runtime and blocks.
+/// Must NOT be called from within a tokio runtime: it builds its own and blocks.
+pub fn fetch_github_metadata(gh: &GithubContext) -> Result<RemoteMetadata> {
+    let client = GitHubClient::try_from(gh.remote())?;
+    Ok(crate::forge::block_on(async {
+        tokio::try_join!(client.get_commits(None), client.get_pull_requests())
+    })?)
+}
+
+/// `tag`/`previous_tag` are the real tag names, needed for a correct compare link
+/// with prefixed tags. Without `metadata` the notes keep their grouping and compare
+/// link but credit no contributors or PRs.
 pub fn generate_release_notes_with_github(
     release: &PackageRelease,
     gh: &GithubContext,
+    metadata: Option<&RemoteMetadata>,
     tag: &str,
     previous_tag: &str,
     template: Option<&str>,
 ) -> Result<String> {
-    use git_cliff_core::config::Remote;
-
-    let build_config = |offline: bool| {
-        let mut config = GITHUB_CLIFF_CONFIG.clone();
-        if let Some(body) = template {
-            config.changelog.body = body.to_string();
-        }
-        config.remote.offline = offline;
-        if !offline {
-            config.remote.github = Remote {
-                owner: gh.owner.to_string(),
-                repo: gh.repo.to_string(),
-                token: Some(secrecy::SecretString::new(gh.token.to_string())),
-                is_custom: true,
-                api_url: gh.api_url.map(String::from),
-                ..Default::default()
-            };
-        }
-        config
-    };
-    let build_release = || {
-        enriched_release(
-            release,
-            gh.head_commit_id.clone(),
-            gh.web_url,
-            tag,
-            previous_tag,
-        )
-    };
-
-    // On fetch failure, re-render offline so grouped notes and the compare link still come through, minus attribution.
-    match render_changelog(build_config(false), build_release()) {
-        Ok(notes) => Ok(notes),
-        Err(_) => render_changelog(build_config(true), build_release()),
+    let mut config = GITHUB_CLIFF_CONFIG.clone();
+    if let Some(body) = template {
+        config.changelog.body = body.to_string();
     }
+    // Only feeds the `remote.github` template context; rendering stays offline.
+    config.remote.github = gh.remote();
+
+    let mut cliff_release = enriched_release(
+        release,
+        gh.head_commit_id.clone(),
+        gh.web_url,
+        tag,
+        previous_tag,
+    );
+    if let Some((commits, pull_requests)) = metadata {
+        cliff_release.update_github_metadata(commits.clone(), pull_requests.clone())?;
+    }
+    render_changelog(config, cliff_release)
 }
 
 /// Build a git-cliff release from ours, attaching the tag/URL data the template
@@ -156,18 +163,11 @@ fn enriched_release<'a>(
     }
 }
 
-/// git-cliff's `Changelog::new` `.expect()`s (panics) on a failed GitHub fetch, so
-/// we catch the unwind and return `Err` to let the caller fall back to plain notes.
-fn render_changelog(config: CliffConfig, release: CliffRelease) -> Result<String> {
-    let prev_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(|_| {}));
-    let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        Changelog::new(vec![release], config, None)
-    }));
-    std::panic::set_hook(prev_hook);
-
-    let changelog = built
-        .map_err(|_| anyhow::anyhow!("GitHub metadata fetch failed"))?
+fn render_changelog(mut config: CliffConfig, release: CliffRelease) -> Result<String> {
+    // git-cliff `.expect()`s its own remote fetch, and `GIT_CLIFF__*` env vars can enable one;
+    // remote data comes from `fetch_github_metadata` instead.
+    config.remote.offline = true;
+    let changelog = Changelog::new(vec![release], config, None)
         .map_err(|e| anyhow::anyhow!("Failed to create changelog: {}", e))?;
 
     let mut output = Vec::new();
@@ -205,30 +205,60 @@ mod tests {
         assert_eq!(cliff[0].id, sha);
     }
 
-    /// Safety net: a bogus-token fetch must become an `Err` via catch_unwind, never a crash.
+    /// The once-fetched metadata credits the author and PR of a commit matched by full SHA.
     #[test]
-    #[ignore = "makes a network call to api.github.com"]
-    fn github_enrichment_failure_is_caught_not_crashed() {
+    fn injected_github_metadata_credits_author_and_pr() {
+        use git_cliff_core::remote::github::{GitHubCommit, GitHubCommitAuthor, GitHubPullRequest};
+
+        let sha = "1234567890abcdef1234567890abcdef12345678";
+        let mut commit =
+            crate::commit::parse_conventional_commit("12345678", "feat: add a thing").unwrap();
+        commit.oid = Some(git2::Oid::from_str(sha).unwrap());
         let release = PackageRelease {
             package_name: "p".into(),
             current_version: semver::Version::new(1, 0, 0),
             next_version: semver::Version::new(1, 1, 0),
             bump: BumpLevel::Minor,
-            commits: vec![],
+            commits: vec![commit],
             is_root: true,
             propagated_from: None,
         };
-        let gh = GithubContext {
-            owner: "BowlingX",
-            repo: "super-release",
-            token: "definitely-not-a-valid-token",
-            api_url: None,
-            head_commit_id: None,
-            web_url: "https://github.com/BowlingX/super-release",
-        };
+        let metadata: RemoteMetadata = (
+            vec![Box::new(GitHubCommit {
+                sha: sha.into(),
+                author: Some(GitHubCommitAuthor {
+                    login: Some("octocat".into()),
+                }),
+                commit: None,
+            })],
+            vec![Box::new(GitHubPullRequest {
+                number: 7,
+                title: Some("Add a thing".into()),
+                merge_commit_sha: Some(sha.into()),
+                labels: vec![],
+            })],
+        );
+
+        let notes = generate_release_notes_with_github(
+            &release,
+            &GithubContext {
+                owner: "o",
+                repo: "r",
+                token: "t",
+                api_url: None,
+                head_commit_id: None,
+                web_url: "https://github.com/o/r",
+            },
+            Some(&metadata),
+            "p/v1.1.0",
+            "p/v1.0.0",
+            None,
+        )
+        .unwrap();
+
         assert!(
-            generate_release_notes_with_github(&release, &gh, "p/v1.1.0", "p/v1.0.0", None)
-                .is_err()
+            notes.contains("by @octocat in [#7](https://github.com/o/r/pull/7)"),
+            "author/PR attribution missing:\n{notes}"
         );
     }
 
@@ -307,9 +337,7 @@ mod tests {
     }
 
     fn render_offline(release: CliffRelease) -> String {
-        let mut config = GITHUB_CLIFF_CONFIG.clone();
-        config.remote.offline = true;
-        render_changelog(config, release).unwrap()
+        render_changelog(GITHUB_CLIFF_CONFIG.clone(), release).unwrap()
     }
 
     /// Offline render of the github template for the given commits and
