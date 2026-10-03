@@ -496,8 +496,12 @@ Both the `changelog` and `github` steps accept a custom [git-cliff](https://git-
 (`template` inline, or `template_file` as a repo-root-relative path; the file wins if both are set). The
 `github` template additionally has GitHub data available — `commit.remote.username` / `commit.remote.pr_number`
 for `@author` and PR links, `github.contributors` (with `is_first_time`) for a "New Contributors" section, and
-`extra.repo_url` / `extra.tag` / `extra.previous_tag` for the compare link. Defaults: the grouped conventional
-changelog for `changelog`, and that plus GitHub attribution for `github`.
+`extra.repo_url` / `extra.tag` / `extra.previous_tag` for the compare link. GitHub data is looked up per released
+commit, so commits landed by a rebase merge link to their PR too, and an author counts as new when their only commits
+are the ones released in this run. Both templates get `extra.dependency_chain` for a release forced by a dependency
+bump: the packages that caused it, root cause first (`null` for a release with its own commits). Defaults: the grouped
+conventional changelog for `changelog`, and that plus GitHub attribution for `github`; both add a line to a
+dependency-only release naming the dependency that changed.
 
 Each step can be scoped:
 

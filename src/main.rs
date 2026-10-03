@@ -257,7 +257,7 @@ fn main() -> Result<()> {
                 style(&release.current_version).dim(),
                 style(&release.next_version).bold().fg(bump_color),
                 style(&release.bump).fg(bump_color),
-                style(reason).cyan()
+                style(reason.join(" -> ")).cyan()
             );
         } else {
             printfl!(

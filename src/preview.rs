@@ -36,7 +36,7 @@ pub fn render_preview_markdown(
     for r in releases {
         let tag = cfg.format_tag(&r.package_name, &r.next_version, r.is_root);
         let bump = match &r.propagated_from {
-            Some(reason) => format!("{} (via {})", r.bump, reason),
+            Some(chain) => format!("{} (via {})", r.bump, chain.join(" -> ")),
             None => r.bump.to_string(),
         };
         let _ = writeln!(

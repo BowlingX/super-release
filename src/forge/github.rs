@@ -3,6 +3,7 @@
 mod api;
 mod detect;
 mod links;
+pub mod metadata;
 
 use anyhow::Result;
 
@@ -13,8 +14,31 @@ use api::{all_issue_comments, build_client, find_draft_release, upload_assets};
 use detect::{is_github_dot_com, numeric_id, pr_context_from_event, repo_from_env};
 
 pub(crate) use links::release_url;
+use metadata::ReleaseAttribution;
 
 pub struct GitHubForge;
+
+impl GitHubForge {
+    /// Author and merged PR of each released commit (full SHAs), plus the authors
+    /// contributing for the first time, judged against the history of `head`.
+    pub fn release_attribution(
+        &self,
+        token: &str,
+        api_url: Option<&str>,
+        repo: &RepoRef,
+        head: Option<&str>,
+        shas: &[String],
+    ) -> Result<ReleaseAttribution> {
+        if shas.is_empty() {
+            return Ok(ReleaseAttribution::default());
+        }
+        block_on(async move {
+            let client =
+                build_client(token, metadata::graphql_base_uri(api_url).as_deref()).await?;
+            metadata::release_attribution(&client, repo, head, shas).await
+        })
+    }
+}
 
 impl Forge for GitHubForge {
     fn token(&self) -> Option<String> {

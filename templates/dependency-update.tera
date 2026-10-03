@@ -1,0 +1,4 @@
+{% if extra.dependency_chain %}
+Released because its dependency `{{ extra.dependency_chain | last }}` was updated
+{%- if extra.dependency_chain | length > 1 %} (via `{{ extra.dependency_chain | join(sep="` → `") }}`){% endif %}.
+{% endif %}

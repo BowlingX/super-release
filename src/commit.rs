@@ -109,6 +109,11 @@ pub struct ConventionalCommit {
 }
 
 impl ConventionalCommit {
+    /// The full 40-character SHA, when the commit was read from the repository.
+    pub fn full_sha(&self) -> Option<String> {
+        self.oid.map(|o| o.to_string())
+    }
+
     /// The message with a git-style `Revert "..."` subject rewritten to
     /// `revert: <subject>` (git-cliff filters unconventional subjects).
     /// `raw_message` must stay untouched: [`filter_reverted_commits`]
@@ -207,7 +212,7 @@ pub fn filter_reverted_commits(commits: Vec<ConventionalCommit>) -> Vec<Conventi
     for (i, commit) in commits.iter().enumerate() {
         if !held.is_empty() {
             let header = commit.raw_message.lines().next().unwrap_or("").trim();
-            let full_hash = commit.oid.map(|o| o.to_string());
+            let full_hash = commit.full_sha();
 
             let matched = held.iter().position(|&ri| {
                 let info = commits[ri]

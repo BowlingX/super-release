@@ -1,16 +1,14 @@
 mod comments;
 
 use anyhow::{Context, Result};
-use git_cliff_core::remote::RemoteMetadata;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 use super::{ReleaseContext, Step, StepConfig, StepContext, parse_options};
-use crate::forge::{self, Forge, github::GitHubForge};
-use crate::notes::{
-    GithubContext, fetch_github_metadata, generate_release_notes,
-    generate_release_notes_with_github,
-};
+use crate::forge::github::GitHubForge;
+use crate::forge::github::metadata::ReleaseAttribution;
+use crate::forge::{self, Forge};
+use crate::notes::{GithubContext, generate_release_notes, generate_release_notes_with_github};
 use crate::package::Package;
 use crate::version::PackageRelease;
 use comments::build_success_comments;
@@ -181,7 +179,6 @@ impl Step for GithubStep {
         let gh = GithubContext {
             owner: &gh_repo.owner,
             repo: &gh_repo.repo,
-            token: &token,
             api_url: base_uri.as_deref(),
             head_commit_id: ctx
                 .repo
@@ -196,7 +193,21 @@ impl Step for GithubStep {
             opts.template.as_deref(),
             opts.template_file.as_deref(),
         )?;
-        let metadata = fetch_github_metadata(&gh)
+        let mut shas: Vec<String> = releases
+            .iter()
+            .flat_map(|r| &r.commits)
+            .filter_map(|c| c.full_sha())
+            .collect();
+        shas.sort();
+        shas.dedup();
+        let attribution = forge
+            .release_attribution(
+                &token,
+                base_uri.as_deref(),
+                &gh_repo,
+                gh.head_commit_id.as_deref(),
+                &shas,
+            )
             .inspect_err(|e| {
                 eprintln!(
                     "  [github] Warning: could not fetch GitHub metadata, release notes credit no contributors or PRs: {:#}",
@@ -213,7 +224,7 @@ impl Step for GithubStep {
                     r,
                     &assets,
                     &gh,
-                    metadata.as_ref(),
+                    attribution.as_ref(),
                     template.as_deref(),
                 )
             })
@@ -249,7 +260,7 @@ fn build_plan(
     release: &PackageRelease,
     assets: &[PathBuf],
     gh: &GithubContext,
-    metadata: Option<&RemoteMetadata>,
+    attribution: Option<&ReleaseAttribution>,
     template: Option<&str>,
 ) -> forge::ReleasePlan {
     let tag = ctx.cfg.format_tag(
@@ -276,7 +287,7 @@ fn build_plan(
     let body = generate_release_notes_with_github(
         release,
         gh,
-        metadata,
+        attribution,
         &tag,
         &previous_tag,
         template,

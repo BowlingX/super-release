@@ -23,7 +23,7 @@ pub struct PackageRelease {
     pub is_root: bool,
     /// If this release was triggered by a dependency update rather than direct
     /// commits, contains the dependency chain that caused the propagation.
-    pub propagated_from: Option<String>,
+    pub propagated_from: Option<Vec<String>>,
 }
 
 struct PkgTagInfo {
@@ -332,9 +332,9 @@ fn propagate_to_dependents(
     let mut released: HashSet<String> = releases.iter().map(|r| r.package_name.clone()).collect();
 
     // BFS queue: (package_name_that_triggered, chain_so_far)
-    let mut queue: std::collections::VecDeque<(String, String)> = releases
+    let mut queue: std::collections::VecDeque<(String, Vec<String>)> = releases
         .iter()
-        .map(|r| (r.package_name.clone(), r.package_name.clone()))
+        .map(|r| (r.package_name.clone(), vec![r.package_name.clone()]))
         .collect();
 
     while let Some((trigger_name, chain)) = queue.pop_front() {
@@ -374,12 +374,15 @@ fn propagate_to_dependents(
             {
                 eprintln!(
                     "  [version] Skipping cascade to '{}': version {} already exists as a tag on another branch (dependency chain: {})",
-                    dep_pkg.name, next_version, chain
+                    dep_pkg.name,
+                    next_version,
+                    chain.join(" -> ")
                 );
                 continue;
             }
 
-            let next_chain = format!("{} -> {}", chain, dep_pkg.name);
+            let mut next_chain = chain.clone();
+            next_chain.push(dep_pkg.name.clone());
 
             releases.push(PackageRelease {
                 package_name: dep_pkg.name.clone(),
@@ -1148,7 +1151,7 @@ mod tests {
             Version::parse("10.267.0-test-tasks-tsmain-2.2").unwrap()
         );
         assert_eq!(dep.bump, BumpLevel::Patch);
-        assert_eq!(dep.propagated_from.as_deref(), Some("@test/assets"));
+        assert_eq!(dep.propagated_from, Some(vec!["@test/assets".to_string()]));
     }
 
     #[test]
@@ -1205,7 +1208,10 @@ mod tests {
         assert_eq!(b.next_version, Version::parse("1.1.0-beta.3").unwrap());
         let c = releases.iter().find(|r| r.package_name == "c").unwrap();
         assert_eq!(c.next_version, Version::parse("2.0.1-beta.1").unwrap());
-        assert_eq!(c.propagated_from.as_deref(), Some("a -> b"));
+        assert_eq!(
+            c.propagated_from,
+            Some(vec!["a".to_string(), "b".to_string()])
+        );
     }
 
     #[test]
