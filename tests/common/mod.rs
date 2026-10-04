@@ -18,5 +18,10 @@ pub fn git(dir: &Path, args: &[&str]) {
 }
 
 pub fn super_release_bin() -> Command {
-    Command::cargo_bin("super-release").unwrap()
+    let mut cmd = Command::cargo_bin("super-release").unwrap();
+    // Keep output free of CI log-group markers when the tests themselves run in CI.
+    cmd.env_remove("GITHUB_ACTIONS")
+        .env_remove("GITLAB_CI")
+        .env_remove("TF_BUILD");
+    cmd
 }

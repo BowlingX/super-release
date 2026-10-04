@@ -7,6 +7,7 @@ mod config;
 mod forge;
 mod git;
 mod notes;
+mod output;
 mod package;
 mod pm;
 mod preview;
@@ -119,11 +120,7 @@ fn main() -> Result<()> {
     }
 
     if !quiet {
-        printfl!(
-            "{} Discovered {} package(s):",
-            style(">>").bold().blue(),
-            packages.len()
-        );
+        let _section = output::section(format!("Discovered {} package(s):", packages.len()));
         for pkg in packages.iter().chain(&skipped) {
             let path_display = if pkg.path.as_os_str().is_empty() {
                 ".".to_string()
@@ -198,12 +195,11 @@ fn main() -> Result<()> {
         } else {
             String::new()
         };
-        printfl!(
-            "{} Branch: {}{}",
-            style(">>").bold().blue(),
+        output::header(format_args!(
+            "Branch: {}{}",
             style(&branch_ctx.branch_name).bold(),
             style(channel_info).dim()
-        );
+        ));
         printfl!();
     });
 
@@ -227,19 +223,14 @@ fn main() -> Result<()> {
     }
 
     if releases.is_empty() {
-        printfl!(
-            "{} {}",
-            style(">>").bold().blue(),
-            style("No releases needed. All packages are up to date.").green()
-        );
+        output::header(style("No releases needed. All packages are up to date.").green());
         return Ok(());
     }
 
-    printfl!(
-        "{} Release plan ({} package(s) to release):\n",
-        style(">>").bold().blue(),
+    output::header(format_args!(
+        "Release plan ({} package(s) to release):\n",
         releases.len()
-    );
+    ));
 
     for release in &releases {
         let bump_color = match release.bump {
@@ -296,9 +287,10 @@ fn main() -> Result<()> {
     }
     printfl!();
 
-    printfl!("{} Bumping package versions", style(">>").bold().blue());
-    let mut modified_files =
-        pkg_resolver.bump_versions(&repo_root, &packages, &releases, cli.dry_run)?;
+    let mut modified_files = {
+        let _section = output::section("Bumping package versions");
+        pkg_resolver.bump_versions(&repo_root, &packages, &releases, cli.dry_run)?
+    };
 
     let step_ctx = step::StepContext {
         repo_root: &repo_root,
@@ -331,11 +323,7 @@ fn main() -> Result<()> {
             }
         };
 
-        printfl!(
-            "{} Running step: {}",
-            style(">>").bold().blue(),
-            style(p.name()).bold()
-        );
+        let _section = output::section(format!("Running step: {}", style(p.name()).bold()));
 
         let (filtered_packages, filtered_releases) =
             run::filter_for_step(step_cfg, &packages, &releases);
@@ -368,18 +356,17 @@ fn main() -> Result<()> {
         printfl!();
     }
 
-    printfl!(
-        "{} Finalizing git commit and tags",
-        style(">>").bold().blue()
-    );
-    run::finalize_git(
-        &repo_root,
-        &repo,
-        &cfg,
-        &releases,
-        &modified_files,
-        cli.dry_run,
-    )?;
+    {
+        let _section = output::section("Finalizing git commit and tags");
+        run::finalize_git(
+            &repo_root,
+            &repo,
+            &cfg,
+            &releases,
+            &modified_files,
+            cli.dry_run,
+        )?;
+    }
 
     // Publishes to external services (e.g. GitHub Releases) only after the commit and tags exist on the remote.
     run::run_release_phase(

@@ -49,7 +49,7 @@ impl CommandFailure {
     /// Prints the last 20 output lines on a TTY (CI already streamed every line) and converts into an error.
     /// The message itself is left to the returned error so callers do not print it twice.
     pub fn report(self) -> anyhow::Error {
-        if !self.output.is_empty() && console::Term::stdout().is_term() {
+        if !self.output.is_empty() && crate::output::is_interactive() {
             let tail = &self.output[self.output.len().saturating_sub(20)..];
             let _ = MULTI.println(format!(
                 "  {}\n{}",
@@ -85,7 +85,7 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<(), CommandFai
         )
     })?;
 
-    let is_tty = console::Term::stdout().is_term();
+    let is_tty = crate::output::is_interactive();
     let all_output: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     let spinner = if is_tty {

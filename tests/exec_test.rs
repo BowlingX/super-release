@@ -1,28 +1,10 @@
-use assert_cmd::Command;
+mod common;
+
+use common::{git, super_release_bin};
 use predicates::prelude::*;
 use std::fs;
 use std::path::Path;
-use std::process;
 use tempfile::TempDir;
-
-fn git(dir: &Path, args: &[&str]) {
-    let output = process::Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    if !output.status.success() {
-        panic!(
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
-
-fn super_release_bin() -> Command {
-    Command::cargo_bin("super-release").unwrap()
-}
 
 fn setup_repo(root: &Path) {
     git(root, &["init", "-b", "main"]);
