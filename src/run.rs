@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use console::style;
 
 use crate::cli::Cli;
-use crate::{config, forge, git, package, preview, step, version};
+use crate::{config, forge, git, output, package, preview, step, version};
 
 /// Core git finalize: stage modified files, commit, tag, optionally push.
 pub fn finalize_git(
@@ -411,9 +411,7 @@ pub fn run_release_phase(
                 .iter()
                 .any(|r| step_covers_package(s, &r.package_name))
         });
-    if has_release_work {
-        printfl!("{} Publishing releases", style(">>").bold().blue());
-    }
+    let _section = has_release_work.then(|| output::section("Publishing releases"));
 
     let release_ctx = step::ReleaseContext {
         repo_root,

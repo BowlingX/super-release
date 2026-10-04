@@ -224,6 +224,10 @@ release may differ after a squash-merge. Requires `pull-requests: write` permiss
 6. **Run steps** -- changelog, npm publish, exec commands
 7. **Git finalize** -- commits modified files, creates tags, optionally pushes
 
+In GitHub Actions (and Gitea/Forgejo Actions), GitLab CI and Azure Pipelines, each output section (discovered
+packages, version bumps, every step including its forwarded command output, git finalize, publishing releases) is
+printed as a collapsible log group. The release plan and the final result stay visible.
+
 ## Conventional Commits
 
 | Commit                                                | Bump       |
