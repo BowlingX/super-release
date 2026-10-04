@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.16.0] - 2026-10-04
+
+### 🚀 Features
+
+- Added grouped output for supported platforms (#56)
 ## [1.15.0] - 2026-10-03
 
 ### 🚀 Features
