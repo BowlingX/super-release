@@ -815,11 +815,33 @@ mod fake_npm {
     struct FakeNpmRun {
         _dir: TempDir,
         root: PathBuf,
-        publish_marker: PathBuf,
+        /// Directory name of each package `publish` / `stage publish` ran in, in call order.
+        publish_log: PathBuf,
         output: process::Output,
     }
 
     impl FakeNpmRun {
+        fn published_dirs(&self) -> Vec<String> {
+            fs::read_to_string(&self.publish_log)
+                .unwrap_or_default()
+                .lines()
+                .map(String::from)
+                .collect()
+        }
+
+        fn publish_called(&self) -> bool {
+            !self.published_dirs().is_empty()
+        }
+
+        fn tag_exists(&self, tag: &str) -> bool {
+            let tags = process::Command::new("git")
+                .args(["tag", "-l", tag])
+                .current_dir(&self.root)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&tags.stdout).trim() == tag
+        }
+
         fn combined_output(&self) -> String {
             format!(
                 "stdout: {}\nstderr: {}",
@@ -839,22 +861,43 @@ mod fake_npm {
     }
 
     /// Releases `setup_single_package` through the npm step with a fake `npm` whose `view` and
-    /// `publish` subcommands run the given shell snippets; `publish` always touches a marker first.
+    /// `publish` subcommands run the given shell snippets; `publish` always logs its package dir first.
     fn release_with_fake_npm(view_script: &str, publish_script: &str) -> FakeNpmRun {
+        release_with_fake_npm_in(
+            setup_single_package,
+            false,
+            "10.0.0",
+            view_script,
+            publish_script,
+        )
+    }
+
+    /// Like [`release_with_fake_npm`], for the repo built by `setup`, with the npm step `staged` or not and a
+    /// fake `npm --version` of `npm_version`. `npm stage publish` runs `publish_script` like `npm publish`.
+    fn release_with_fake_npm_in(
+        setup: fn(&Path),
+        staged: bool,
+        npm_version: &str,
+        view_script: &str,
+        publish_script: &str,
+    ) -> FakeNpmRun {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = TempDir::new().unwrap();
         let root = dir.path().join("work");
         fs::create_dir_all(&root).unwrap();
-        setup_single_package(&root);
+        setup(&root);
+        // `mono-root` is `setup_monorepo`'s private root package; excluding it is a no-op elsewhere.
+        let options = if staged {
+            "\n    options:\n      staged: true"
+        } else {
+            ""
+        };
         fs::write(
             root.join(".release.yaml"),
-            r#"
-    branches:
-      - main
-    steps:
-      - name: npm
-    "#,
+            format!(
+                "branches:\n  - main\nexclude:\n  - mono-root\nsteps:\n  - name: npm{options}\n"
+            ),
         )
         .unwrap();
         git(&root, &["add", "."]);
@@ -862,7 +905,7 @@ mod fake_npm {
 
         let fake_bin = dir.path().join("fake-bin");
         fs::create_dir_all(&fake_bin).unwrap();
-        let publish_marker = dir.path().join("publish-was-called");
+        let publish_log = dir.path().join("publish-log");
         let fake_npm = fake_bin.join("npm");
         fs::write(
             &fake_npm,
@@ -871,14 +914,14 @@ mod fake_npm {
     if [ "$1" = "view" ]; then
     {view_script}
     elif [ "$1" = "--version" ]; then
-        echo "10.0.0"
+        echo "{npm_version}"
         exit 0
-    elif [ "$1" = "publish" ]; then
-        touch "{marker}"
+    elif [ "$1" = "publish" ] || [ "$1 $2" = "stage publish" ]; then
+        basename "$PWD" >> "{log}"
     {publish_script}
     fi
     "#,
-                marker = publish_marker.display()
+                log = publish_log.display()
             ),
         )
         .unwrap();
@@ -899,7 +942,7 @@ mod fake_npm {
         FakeNpmRun {
             _dir: dir,
             root,
-            publish_marker,
+            publish_log,
             output,
         }
     }
@@ -935,7 +978,7 @@ mod fake_npm {
             stdout
         );
         assert!(
-            !run.publish_marker.exists(),
+            !run.publish_called(),
             "npm publish should NOT have been called when version is already published"
         );
     }
@@ -946,7 +989,7 @@ mod fake_npm {
 
         let stdout = run.assert_success();
         assert!(
-            run.publish_marker.exists(),
+            run.publish_called(),
             "npm publish SHOULD have been called when version is not published:\n{}",
             stdout
         );
@@ -963,18 +1006,12 @@ mod fake_npm {
             stdout
         );
         assert!(
-            run.publish_marker.exists(),
+            run.publish_called(),
             "npm publish should have been attempted:\n{}",
             stdout
         );
-        let tags = process::Command::new("git")
-            .args(["tag", "-l", "v1.1.0"])
-            .current_dir(&run.root)
-            .output()
-            .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&tags.stdout).trim(),
-            "v1.1.0",
+        assert!(
+            run.tag_exists("v1.1.0"),
             "Release should still be tagged:\n{}",
             run.combined_output()
         );
@@ -991,12 +1028,179 @@ mod fake_npm {
             combined
         );
         assert!(
-            !run.publish_marker.exists(),
+            !run.publish_called(),
             "npm publish should NOT be called on auth error"
         );
         assert!(
             combined.contains("Registry check failed") || combined.contains("E401"),
             "Should mention registry check failure:\n{}",
+            combined
+        );
+    }
+
+    const STAGE_OK: &str = r#"    echo "+ my-app@1.1.0 (staged with id 1de6f3db-2ed9-4d72-b3dd-8f0e2b474a2f)"
+        exit 0"#;
+
+    const STAGE_CONFLICT: &str = r#"    echo "npm error code E409" >&2
+        echo "npm error 409 Conflict - PUT https://registry.npmjs.org/my-app - Cannot publish over previously staged version \"1.1.0\"" >&2
+        exit 1"#;
+
+    #[test]
+    fn test_npm_staged_publish_prints_approval_command() {
+        let run = release_with_fake_npm_in(
+            setup_single_package,
+            true,
+            "11.15.0",
+            VIEW_NOT_FOUND,
+            STAGE_OK,
+        );
+
+        let stdout = run.assert_success();
+        assert!(
+            stdout.contains("Staging my-app v1.1.0: npm stage publish"),
+            "Should stage instead of publishing:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("npm stage approve 1de6f3db-2ed9-4d72-b3dd-8f0e2b474a2f"),
+            "Should print the approval command with the stage id:\n{}",
+            stdout
+        );
+        assert!(
+            run.tag_exists("v1.1.0"),
+            "Staged release should be tagged:\n{}",
+            run.combined_output()
+        );
+    }
+
+    #[test]
+    fn test_npm_stage_conflict_is_treated_as_already_staged() {
+        let run = release_with_fake_npm_in(
+            setup_single_package,
+            true,
+            "11.15.0",
+            VIEW_NOT_FOUND,
+            STAGE_CONFLICT,
+        );
+
+        let stdout = run.assert_success();
+        assert!(
+            stdout.contains("already staged (pending approval), skipping"),
+            "Should skip the already staged version:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("npm stage list my-app"),
+            "Should point at the stage list for the unknown stage id:\n{}",
+            stdout
+        );
+        assert!(
+            run.tag_exists("v1.1.0"),
+            "Release should still be tagged:\n{}",
+            run.combined_output()
+        );
+    }
+
+    #[test]
+    fn test_npm_publish_of_staged_version_warns_and_skips() {
+        let run = release_with_fake_npm(VIEW_NOT_FOUND, STAGE_CONFLICT);
+
+        run.assert_success();
+        let combined = run.combined_output();
+        assert!(
+            combined.contains("is already staged and awaits approval"),
+            "Should warn that the version awaits approval:\n{}",
+            combined
+        );
+        assert!(
+            run.tag_exists("v1.1.0"),
+            "Release should still be tagged:\n{}",
+            combined
+        );
+    }
+
+    #[test]
+    fn test_npm_staged_requires_supported_npm_version() {
+        let run = release_with_fake_npm_in(
+            setup_single_package,
+            true,
+            "11.14.0",
+            VIEW_NOT_FOUND,
+            STAGE_OK,
+        );
+
+        let combined = run.combined_output();
+        assert!(
+            !run.output.status.success(),
+            "Should fail with an npm that cannot stage:\n{}",
+            combined
+        );
+        assert!(
+            combined.contains("Staged publishing requires npm >= 11.15.0 (found 11.14.0)"),
+            "Should explain the version requirement:\n{}",
+            combined
+        );
+        assert!(
+            !run.publish_called(),
+            "Nothing should be staged:\n{}",
+            combined
+        );
+    }
+
+    #[test]
+    fn test_npm_staged_monorepo_lists_dependencies_first() {
+        let run =
+            release_with_fake_npm_in(setup_monorepo, true, "11.15.0", VIEW_NOT_FOUND, STAGE_OK);
+
+        let stdout = run.assert_success();
+        let core = stdout.find("1. @test/core@1.1.0");
+        let utils = stdout.find("2. @test/utils@1.0.1");
+        assert!(
+            core.is_some() && utils.is_some() && core < utils,
+            "Should list core before its dependent utils:\n{}",
+            stdout
+        );
+        assert!(
+            stdout.contains("approve after: @test/core"),
+            "Should tell to approve utils after core:\n{}",
+            stdout
+        );
+    }
+
+    #[test]
+    fn test_npm_skips_dependents_of_failed_package() {
+        let run = release_with_fake_npm_in(
+            setup_monorepo,
+            false,
+            "10.0.0",
+            VIEW_NOT_FOUND,
+            r#"    if [ "$(basename "$PWD")" = "core" ]; then
+            echo "npm error code E500" >&2
+            exit 1
+        fi
+        exit 0"#,
+        );
+
+        let combined = run.combined_output();
+        assert!(
+            !run.output.status.success(),
+            "Should fail when a package fails to publish:\n{}",
+            combined
+        );
+        assert_eq!(
+            run.published_dirs(),
+            ["core"],
+            "utils must not be published after its dependency failed:\n{}",
+            combined
+        );
+        assert!(
+            combined.contains("@test/utils skipped: dependency @test/core failed to publish"),
+            "Should explain why utils was skipped:\n{}",
+            combined
+        );
+        assert!(
+            !run.tag_exists("@test/core/v1.1.0") && !run.tag_exists("@test/utils/v1.0.1"),
+            "Nothing should be tagged:\n{}",
             combined
         );
     }

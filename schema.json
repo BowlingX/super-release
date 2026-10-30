@@ -247,6 +247,11 @@
           "default": true,
           "description": "Check the registry before publishing to skip already-published versions. Set to false to always attempt publish."
         },
+        "staged": {
+          "type": "boolean",
+          "default": false,
+          "description": "Stage packages for maintainer approval (npm staged publishing) instead of publishing them directly. Requires npm 11.15+, pnpm 11.3+ or yarn 4.16+; a maintainer approves each staged version with 2FA."
+        },
         "package_manager": {
           "type": "string",
           "enum": ["npm", "yarn", "pnpm"],

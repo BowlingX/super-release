@@ -26,6 +26,7 @@ steps:
   - name: npm
     options:
       provenance: true
+      staged: true
     packages:
       - 'super-release'
       - 'super-release-darwin-arm64'
