@@ -582,6 +582,10 @@ steps: []
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the limit; split when next touched"
+)]
 fn test_monorepo_maintenance_cascade_with_branch_packages_whitelist() {
     // Combined scenario: maintenance branch `10.242.x` with an explicit
     // `packages: ["@acme/lib"]` whitelist. Three packages all depending on

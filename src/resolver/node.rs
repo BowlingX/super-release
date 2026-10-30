@@ -190,28 +190,25 @@ fn parse_package_json(root: &Path, manifest_path: &Path) -> Result<Option<Packag
         ),
     };
 
-    let name = match pkg_json.name {
-        Some(n) => n,
-        None => {
-            let display_path = if is_root {
-                ".".to_string()
-            } else {
-                rel_dir.display().to_string()
-            };
-            return Ok(Some(Package {
-                name: display_path,
-                version: Version::new(0, 0, 0),
-                path: rel_dir,
-                manifest_path: rel_manifest,
-                is_root,
-                local_dependencies: HashMap::new(),
-                dependencies: HashMap::new(),
-                dev_dependencies: HashMap::new(),
-                optional_dependencies: HashMap::new(),
-                warning: Some("no \"name\" field, skipped".to_string()),
-                skipped: true,
-            }));
-        }
+    let Some(name) = pkg_json.name else {
+        let display_path = if is_root {
+            ".".to_string()
+        } else {
+            rel_dir.display().to_string()
+        };
+        return Ok(Some(Package {
+            name: display_path,
+            version: Version::new(0, 0, 0),
+            path: rel_dir,
+            manifest_path: rel_manifest,
+            is_root,
+            local_dependencies: HashMap::new(),
+            dependencies: HashMap::new(),
+            dev_dependencies: HashMap::new(),
+            optional_dependencies: HashMap::new(),
+            warning: Some("no \"name\" field, skipped".to_string()),
+            skipped: true,
+        }));
     };
 
     let dependencies = pkg_json.dependencies.unwrap_or_default();

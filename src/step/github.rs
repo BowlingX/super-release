@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use super::{ReleaseContext, Step, StepConfig, StepContext, parse_options};
 use crate::forge::github::GitHubForge;
-use crate::forge::github::metadata::ReleaseAttribution;
 use crate::forge::{self, Forge};
+use crate::git;
 use crate::notes::{GithubContext, generate_release_notes, generate_release_notes_with_github};
 use crate::package::Package;
 use crate::version::PackageRelease;
@@ -180,12 +180,7 @@ impl Step for GithubStep {
             owner: &gh_repo.owner,
             repo: &gh_repo.repo,
             api_url: base_uri.as_deref(),
-            head_commit_id: ctx
-                .repo
-                .head()
-                .ok()
-                .and_then(|h| h.peel_to_commit().ok())
-                .map(|c| c.id().to_string()),
+            head_commit_id: git::head_sha(ctx.repo),
             web_url: &web_url,
         };
         let template = super::resolve_template(
@@ -193,41 +188,9 @@ impl Step for GithubStep {
             opts.template.as_deref(),
             opts.template_file.as_deref(),
         )?;
-        let mut shas: Vec<String> = releases
-            .iter()
-            .flat_map(|r| &r.commits)
-            .filter_map(|c| c.full_sha())
-            .collect();
-        shas.sort();
-        shas.dedup();
-        let attribution = forge
-            .release_attribution(
-                &token,
-                base_uri.as_deref(),
-                &gh_repo,
-                gh.head_commit_id.as_deref(),
-                &shas,
-            )
-            .inspect_err(|e| {
-                eprintln!(
-                    "  [github] Warning: could not fetch GitHub metadata, release notes credit no contributors or PRs: {:#}",
-                    e
-                );
-            })
-            .ok();
         let plans: Vec<_> = releases
             .iter()
-            .map(|r| {
-                build_plan(
-                    ctx,
-                    &opts,
-                    r,
-                    &assets,
-                    &gh,
-                    attribution.as_ref(),
-                    template.as_deref(),
-                )
-            })
+            .map(|r| build_plan(ctx, &opts, r, &assets, &gh, template.as_deref()))
             .collect();
 
         let results = forge.publish_releases(&token, base_uri.as_deref(), &gh_repo, &plans)?;
@@ -260,7 +223,6 @@ fn build_plan(
     release: &PackageRelease,
     assets: &[PathBuf],
     gh: &GithubContext,
-    attribution: Option<&ReleaseAttribution>,
     template: Option<&str>,
 ) -> forge::ReleasePlan {
     let tag = ctx.cfg.format_tag(
@@ -283,21 +245,25 @@ fn build_plan(
     let prerelease = opts
         .prerelease
         .unwrap_or_else(|| ctx.branch.prerelease.is_some());
+    // Looked up once before the steps ran (see `run::fetch_release_metadata`).
+    let meta = ctx.release_meta;
+    let pr_notes = meta.and_then(|m| m.notes_for(&release.package_name));
     // Enrich with contributors/PR links; on a template error, fall back to the default plain notes.
     let body = generate_release_notes_with_github(
         release,
         gh,
-        attribution,
+        meta.map(|m| &m.attribution),
         &tag,
         &previous_tag,
         template,
+        pr_notes,
     )
     .unwrap_or_else(|e| {
         eprintln!(
             "  [github] Warning: could not render release notes for {}, using plain notes: {}",
             tag, e
         );
-        generate_release_notes(release, None).unwrap_or_default()
+        generate_release_notes(release, None, pr_notes).unwrap_or_default()
     });
 
     forge::ReleasePlan {

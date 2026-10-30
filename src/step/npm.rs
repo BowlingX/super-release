@@ -88,6 +88,10 @@ impl Step for NpmStep {
         resolve_pm(ctx, &opts)?.verify(opts.mode())
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "predates the limit; split when next touched"
+    )]
     fn publish(
         &self,
         ctx: &StepContext,

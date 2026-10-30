@@ -477,12 +477,7 @@ mod tests {
         assert_eq!(plain.normalized_message(), "feat: x");
     }
 
-    /// Parse and attach the full oid, as production commits have (src/git.rs).
-    fn oc(sha40: &str, msg: &str) -> ConventionalCommit {
-        let mut c = parse_conventional_commit(&sha40[..8], msg).unwrap();
-        c.oid = Some(git2::Oid::from_str(sha40).unwrap());
-        c
-    }
+    use crate::test_fixtures::oc;
 
     fn revert_of(target_header: &str, target_sha: &str) -> String {
         format!("Revert \"{target_header}\"\n\nThis reverts commit {target_sha}.")

@@ -74,6 +74,10 @@
     "git": {
       "description": "Git commit and tag behavior after steps run",
       "$ref": "#/$defs/gitConfig"
+    },
+    "release_notes": {
+      "description": "Release notes drafted in pull-request comments (`@super-release release-notes`)",
+      "$ref": "#/$defs/releaseNotesConfig"
     }
   },
   "$defs": {
@@ -187,6 +191,26 @@
           "type": "boolean",
           "default": true,
           "description": "Push all refs atomically (git push --atomic) so a lost push race can't leave partial state on the remote. Disable for servers without atomic push support."
+        }
+      }
+    },
+    "releaseNotesConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pr_comments": {
+          "type": "boolean",
+          "default": true,
+          "description": "Read `@super-release release-notes` directives from the comments of the released pull requests (needs a GitHub token). They replace the generated notes of that PR's commits in the changelog and GitHub release."
+        },
+        "trusted_authors": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIMER", "FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE"]
+          },
+          "default": ["OWNER", "MEMBER", "COLLABORATOR"],
+          "description": "GitHub author associations whose directives are honored. Comments stay editable after merge, so keep this to people with write access."
         }
       }
     },

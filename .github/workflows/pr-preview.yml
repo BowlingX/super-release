@@ -1,14 +1,13 @@
 name: PR Release Preview
 
 # Posts (and keeps updated) a sticky comment on each pull request showing the
-# next version per package and a preview of the release notes.
+# next version per package and a preview of the release notes. Re-renders when
+# an `@super-release release-notes` comment is added, edited or deleted.
 
 on:
   pull_request:
-
-concurrency:
-  group: pr-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  issue_comment:
+    types: [created, edited, deleted]
 
 permissions:
   contents: read
@@ -17,20 +16,63 @@ permissions:
 jobs:
   preview:
     name: Release preview
+    if: github.event_name == 'pull_request'
+    # Job-level so unrelated comments (skipped below) can't cancel a running preview.
+    concurrency:
+      group: pr-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           # Full history + tags are required to compute version bumps.
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Build super-release
         run: cargo build --release
 
       - name: Post release preview
         run: ./target/release/super-release --preview
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  comment-preview:
+    name: Release preview (release-notes comment)
+    # PR comments mentioning super-release now or before an edit; never its own.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      (contains(github.event.comment.body, '@super-release') ||
+       contains(github.event.changes.body.from, '@super-release')) &&
+      !contains(github.event.comment.body, '<!-- super-release:')
+    concurrency:
+      group: pr-preview-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      # Comment events run with a write token even for fork PRs, so super-release is
+      # built from the default branch and the PR is only read, never built or run.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Build super-release
+        run: cargo build --release
+
+      - name: Check out the pull request
+        env:
+          PR: ${{ github.event.issue.number }}
+        run: |
+          git fetch --no-tags origin "refs/pull/${PR}/head"
+          git worktree add --detach "$RUNNER_TEMP/pr" FETCH_HEAD
+
+      - name: Post release preview
+        run: ./target/release/super-release --preview -C "$RUNNER_TEMP/pr"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

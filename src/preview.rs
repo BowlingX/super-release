@@ -6,17 +6,19 @@ use std::fmt::Write;
 
 use crate::config::Config;
 use crate::notes::generate_release_notes;
+use crate::pr_notes::{self, IgnoreReason, ReleaseMetadata};
 use crate::version::PackageRelease;
 
 /// Stable HTML marker used to find and update the sticky preview comment.
 pub const PREVIEW_MARKER: &str = "<!-- super-release:preview -->";
 
-/// Render the release preview as Markdown; the first line is always [`PREVIEW_MARKER`] so the comment can be updated in place, and notes appear only for packages in `notes_packages`.
+/// Render the release preview as Markdown; the first line is always [`PREVIEW_MARKER`] so the comment can be updated in place, and notes appear only for packages in `notes_packages`. `meta` adds the PR-comment notes.
 pub fn render_preview_markdown(
     releases: &[PackageRelease],
     notes_packages: &HashSet<String>,
     changelog_template: Option<&str>,
     cfg: &Config,
+    meta: Option<&ReleaseMetadata>,
 ) -> String {
     let mut out = String::new();
     out.push_str(PREVIEW_MARKER);
@@ -25,6 +27,9 @@ pub fn render_preview_markdown(
 
     if releases.is_empty() {
         out.push_str("No release will be triggered by this pull request.\n");
+        if let Some(meta) = meta {
+            render_ignored_directives(&mut out, meta);
+        }
         return out;
     }
 
@@ -47,11 +52,13 @@ pub fn render_preview_markdown(
     }
     out.push('\n');
 
+    let notes_for = |r: &PackageRelease| meta.and_then(|m| m.notes_for(&r.package_name));
+
     for r in releases {
         if !notes_packages.contains(&r.package_name) {
             continue;
         }
-        let notes = generate_release_notes(r, changelog_template)
+        let notes = generate_release_notes(r, changelog_template, notes_for(r))
             .unwrap_or_else(|e| format!("_Failed to render release notes: {}_", e));
         let _ = write!(
             out,
@@ -62,11 +69,83 @@ pub fn render_preview_markdown(
         );
     }
 
+    if let Some(meta) = meta {
+        render_note_sources(&mut out, releases, meta);
+        render_ignored_directives(&mut out, meta);
+    }
+
     out.push_str(
         "> ℹ️ Preview based on the current commits in this branch — the final \
          release may differ (e.g. after a squash-merge).\n",
     );
+    if cfg.release_notes.pr_comments {
+        out.push_str(
+            ">\n> ✍️ To write the release notes yourself, comment `@super-release release-notes` \
+             (or `@super-release release-notes@<package>`) followed by Markdown. It replaces the \
+             notes generated from this PR's commits; the newest comment wins and an empty one \
+             restores the generated notes.\n",
+        );
+    }
     out
+}
+
+/// Which PR comments supply each package's notes.
+fn render_note_sources(out: &mut String, releases: &[PackageRelease], meta: &ReleaseMetadata) {
+    let lines: Vec<String> = releases
+        .iter()
+        .filter_map(|r| {
+            let notes = meta
+                .notes_for(&r.package_name)
+                .filter(|n| !n.blocks.is_empty())?;
+            let sources: Vec<String> = notes
+                .blocks
+                .iter()
+                .map(|b| {
+                    let by = b
+                        .author
+                        .as_deref()
+                        .map(|a| format!(" by @{a}"))
+                        .unwrap_or_default();
+                    format!("#{} ([comment]({}){by})", b.pr_number, b.comment_url)
+                })
+                .collect();
+            Some(format!("- `{}`: {}\n", r.package_name, sources.join(", ")))
+        })
+        .collect();
+    if !lines.is_empty() {
+        out.push_str("**✍️ Release notes from PR comments**\n\n");
+        out.extend(lines);
+        out.push('\n');
+    }
+}
+
+/// Directive comments that don't count, and why.
+fn render_ignored_directives(out: &mut String, meta: &ReleaseMetadata) {
+    let mut any = false;
+    for found in pr_notes::directive_comments(meta) {
+        let Some(reason) = found.ignored else {
+            continue;
+        };
+        let author = found.comment.author.as_deref().unwrap_or("ghost");
+        let why = match reason {
+            IgnoreReason::Untrusted => format!(
+                "@{author}'s association (`{}`) is not in `release_notes.trusted_authors`",
+                found.comment.association
+            ),
+            IgnoreReason::UnknownPackage(target) => {
+                format!("no released package with release notes matches `{target}`")
+            }
+        };
+        let _ = writeln!(
+            out,
+            "> ⚠️ Ignored [release notes comment]({}) on #{}: {}.",
+            found.comment.url, found.pr, why
+        );
+        any = true;
+    }
+    if any {
+        out.push('\n');
+    }
 }
 
 #[cfg(test)]
@@ -89,7 +168,7 @@ mod tests {
 
     #[test]
     fn empty_releases_render_no_release_message() {
-        let md = render_preview_markdown(&[], &HashSet::new(), None, &Config::default());
+        let md = render_preview_markdown(&[], &HashSet::new(), None, &Config::default(), None);
         assert!(md.starts_with(PREVIEW_MARKER));
         assert!(md.contains("No release will be triggered"));
     }
@@ -104,7 +183,7 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let md = render_preview_markdown(&releases, &notes, None, &Config::default());
+        let md = render_preview_markdown(&releases, &notes, None, &Config::default(), None);
 
         assert!(md.starts_with(PREVIEW_MARKER));
         assert!(md.contains("| `root-pkg` |"));
@@ -120,7 +199,7 @@ mod tests {
             release("other-pkg", (2, 3, 1), (2, 3, 2)),
         ];
         let notes: HashSet<String> = std::iter::once("root-pkg".to_string()).collect();
-        let md = render_preview_markdown(&releases, &notes, None, &Config::default());
+        let md = render_preview_markdown(&releases, &notes, None, &Config::default(), None);
 
         assert!(md.contains("| `root-pkg` |"));
         assert!(md.contains("| `other-pkg` |"));

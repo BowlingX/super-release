@@ -10,6 +10,7 @@ mod notes;
 mod output;
 mod package;
 mod pm;
+mod pr_notes;
 mod preview;
 mod resolver;
 mod run;
@@ -23,6 +24,11 @@ use clap::Parser;
 use cli::Cli;
 use console::style;
 
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "predates the limit; split when next touched"
+)]
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -164,21 +170,18 @@ fn main() -> Result<()> {
         return run::run_preview(&cli, &repo, &repo_root, &cfg, &packages);
     }
 
-    let branch_ctx = match config::resolve_branch_context(&repo, &cfg)? {
-        Some(ctx) => ctx,
-        None => {
-            let head = repo
-                .head()
-                .ok()
-                .and_then(|h| h.shorthand().ok().map(String::from));
-            let branch = head.as_deref().unwrap_or("HEAD");
-            printfl!(
-                "{} Branch '{}' is not configured for releases, skipping.",
-                style(">>").bold().yellow(),
-                style(branch).bold()
-            );
-            return Ok(());
-        }
+    let Some(branch_ctx) = config::resolve_branch_context(&repo, &cfg)? else {
+        let head = repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().ok().map(String::from));
+        let branch = head.as_deref().unwrap_or("HEAD");
+        printfl!(
+            "{} Branch '{}' is not configured for releases, skipping.",
+            style(">>").bold().yellow(),
+            style(branch).bold()
+        );
+        return Ok(());
     };
 
     if !cli.dry_run && !quiet {
@@ -287,6 +290,10 @@ fn main() -> Result<()> {
     }
     printfl!();
 
+    // Before anything is mutated; shared by the changelog and github steps.
+    let release_meta =
+        run::fetch_release_metadata(&repo, &cfg, &branch_ctx, &releases, cli.dry_run);
+
     let mut modified_files = {
         let _section = output::section("Bumping package versions");
         pkg_resolver.bump_versions(&repo_root, &packages, &releases, cli.dry_run)?
@@ -297,6 +304,7 @@ fn main() -> Result<()> {
         dry_run: cli.dry_run,
         branch: &branch_ctx,
         cfg: &cfg,
+        release_meta: release_meta.as_ref(),
     };
 
     for step_cfg in &cfg.steps {
@@ -311,16 +319,13 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let p = match step::create_step(&step_cfg.name) {
-            Some(p) => p,
-            None => {
-                eprintln!(
-                    "{} Unknown step: {}",
-                    style("warning:").yellow().bold(),
-                    step_cfg.name
-                );
-                continue;
-            }
+        let Some(p) = step::create_step(&step_cfg.name) else {
+            eprintln!(
+                "{} Unknown step: {}",
+                style("warning:").yellow().bold(),
+                step_cfg.name
+            );
+            continue;
         };
 
         let _section = output::section(format!("Running step: {}", style(p.name()).bold()));
@@ -369,15 +374,15 @@ fn main() -> Result<()> {
     }
 
     // Publishes to external services (e.g. GitHub Releases) only after the commit and tags exist on the remote.
-    run::run_release_phase(
-        &repo_root,
-        &repo,
-        &cfg,
-        &branch_ctx,
-        &packages,
-        &releases,
-        cli.dry_run,
-    )?;
+    let release_ctx = step::ReleaseContext {
+        repo_root: &repo_root,
+        dry_run: cli.dry_run,
+        branch: &branch_ctx,
+        cfg: &cfg,
+        repo: &repo,
+        release_meta: release_meta.as_ref(),
+    };
+    run::run_release_phase(&release_ctx, &packages, &releases)?;
 
     if cli.dry_run {
         printfl!(

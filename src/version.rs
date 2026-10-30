@@ -42,6 +42,10 @@ struct PkgTagInfo {
 ///
 /// Resolves tags first to find the oldest boundary, then only walks commits
 /// from HEAD to that boundary — avoids parsing the entire git history.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the limit; split when next touched"
+)]
 pub fn determine_releases(
     repo: &Repository,
     repo_path: &Path,

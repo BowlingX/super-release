@@ -113,8 +113,8 @@ pub enum MaintenanceRange {
 fn parse_maintenance_range(branch_name: &str) -> Option<MaintenanceRange> {
     let parts: Vec<&str> = branch_name.split('.').collect();
     match parts.as_slice() {
-        [major, "x"] | [major, "*"] => major.parse().ok().map(MaintenanceRange::Major),
-        [major, minor, "x"] | [major, minor, "*"] => {
+        [major, "x" | "*"] => major.parse().ok().map(MaintenanceRange::Major),
+        [major, minor, "x" | "*"] => {
             let maj = major.parse().ok()?;
             let min = minor.parse().ok()?;
             Some(MaintenanceRange::MajorMinor(maj, min))

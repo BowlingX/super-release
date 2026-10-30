@@ -90,7 +90,7 @@ pub fn find_config(path: &Path) -> Result<Option<(String, PathBuf, ConfigFormat)
         let file = path.join(candidate);
         match std::fs::read_to_string(&file) {
             Ok(content) => return Ok(Some((content, file, format))),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(anyhow::anyhow!("reading {}: {}", file.display(), e)),
         }
     }

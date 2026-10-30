@@ -15,6 +15,17 @@ codegen-units = 1
 panic = "abort"
 strip = true
 
+# Enforced in CI (`cargo clippy --all-targets -- -D warnings`) on top of the
+# default groups; thresholds are clippy's defaults (25 and 100 lines).
+[lints.clippy]
+cognitive_complexity = "warn"
+too_many_lines = "warn"
+if_not_else = "warn"
+manual_let_else = "warn"
+needless_continue = "warn"
+nonminimal_bool = "warn"
+unnested_or_patterns = "warn"
+
 [dependencies]
 anyhow = "1.0"
 chrono = "0.4"

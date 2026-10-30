@@ -23,5 +23,10 @@ pub fn super_release_bin() -> Command {
     cmd.env_remove("GITHUB_ACTIONS")
         .env_remove("GITLAB_CI")
         .env_remove("TF_BUILD");
+    // Stay offline: with a token, runs query the GitHub API.
+    cmd.env_remove("GITHUB_TOKEN")
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_EVENT_PATH")
+        .env_remove("GITHUB_REF");
     cmd
 }

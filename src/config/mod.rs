@@ -45,6 +45,39 @@ pub struct Config {
     /// Git commit and tag behavior after steps run.
     #[serde(default)]
     pub git: GitConfig,
+
+    /// Release notes drafted in pull-request comments.
+    #[serde(default)]
+    pub release_notes: ReleaseNotesConfig,
+}
+
+/// Release notes drafted in PR comments (`@super-release release-notes`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReleaseNotesConfig {
+    /// Read release-notes directives from the comments of the released PRs.
+    #[serde(default = "default_true")]
+    pub pr_comments: bool,
+
+    /// GitHub author associations whose directives count.
+    #[serde(default = "default_trusted_authors")]
+    pub trusted_authors: Vec<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_trusted_authors() -> Vec<String> {
+    vec!["OWNER".into(), "MEMBER".into(), "COLLABORATOR".into()]
+}
+
+impl Default for ReleaseNotesConfig {
+    fn default() -> Self {
+        Self {
+            pr_comments: true,
+            trusted_authors: default_trusted_authors(),
+        }
+    }
 }
 
 /// Configuration for the core git commit + tag step.
@@ -155,6 +188,7 @@ impl Default for Config {
             dependencies: Vec::new(),
             ignore: Vec::new(),
             git: GitConfig::default(),
+            release_notes: ReleaseNotesConfig::default(),
         }
     }
 }

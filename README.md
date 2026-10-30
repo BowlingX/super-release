@@ -17,6 +17,7 @@ update `package.json` files, publish to npm, and create git tags -- across all p
 - Configurable tag format templates
 - Build in steps: changelog, npm, exec
 - Global file dependencies and ignore patterns
+- Release notes drafted in PR comments (`@super-release release-notes`)
 - Idempotent: safe to rerun after partial failures
 - Dry-run mode with pretty, truncated output
 
@@ -102,6 +103,48 @@ set `base` to the branch the release will actually run from:
   env:
     GITHUB_TOKEN: ${{ github.token }}
 ```
+
+To re-render the preview as soon as someone writes, edits or deletes an
+[`@super-release release-notes`](#release-notes-from-pr-comments) comment (instead of on the next push), add a
+comment-triggered job:
+
+```yaml
+name: Release notes preview
+on:
+  issue_comment:
+    types: [created, edited, deleted]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  preview:
+    # PR comments mentioning super-release now or before an edit; never its own comments.
+    if: >-
+      github.event.issue.pull_request &&
+      (contains(github.event.comment.body, '@super-release') ||
+       contains(github.event.changes.body.from, '@super-release')) &&
+      !contains(github.event.comment.body, '<!-- super-release:')
+    concurrency:
+      group: pr-preview-${{ github.event.issue.number }} # same group as your pull_request preview
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head # comment events check out the default branch
+          fetch-depth: 0
+      - uses: bowlingx/super-release@v1
+        with:
+          preview: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+```
+
+Comment events run with a **write** token even on pull requests from forks. This is fine with the prebuilt action: the
+preview only reads files and git history, keeps `template_file` inside the repository and refuses templates that call
+`get_env`. Never add steps to this job that build or run the pull request's code.
 
 ### Inputs
 
@@ -213,6 +256,51 @@ The preview evaluates the PR against its **base** branch and reflects the commit
 release may differ after a squash-merge. Requires `pull-requests: write` permission and a full checkout
 (`fetch-depth: 0`). A ready-to-use workflow lives in
 [`.github/workflows/pr-preview.yml`](.github/workflows/pr-preview.yml).
+
+## Release notes from PR comments
+
+Release notes are generated from commit messages by default. To write them yourself, comment on the pull request:
+
+```markdown
+@super-release release-notes
+
+- New **plugin API**: register commands with `definePlugin()`
+- Startup is about 2× faster
+```
+
+The Markdown below the first line replaces the notes generated from that PR's commits, in the CHANGELOG.md and the
+GitHub release. Commits from other PRs keep their generated lines. Version bumps are unaffected.
+
+- **Targeting a package:** `@super-release release-notes@<package>` or `@super-release release-notes <package>`
+  (globs work, e.g. `release-notes @acme/*`) applies to that package only. A targeted comment beats an untargeted one.
+- **Newest wins:** of several directives on a PR, the one written or edited last counts. Deleting a comment drops it.
+  A directive with no text below it restores the generated notes.
+- **Several PRs in one release** (e.g. `develop` → `main`): each PR's notes are resolved on their own and combined.
+  Each commit belongs to the PR that merged it first. A release PR that carries other PRs' commits comes first as an
+  intro, then the rest in merge order.
+- **Who can write them:** only comments by owners, members and collaborators count (configurable via
+  [`release_notes`](#release_notes)). Comments stay editable after merge, so drive-by commenters must not reach a
+  release.
+- **Preview:** the [`--preview`](#--preview) comment shows the result and lists ignored directives. A comment that
+  triggered the preview gets 👀 when it was picked up and 😕 when it was ignored.
+
+The release run reads the comments through the GitHub API, so it needs `GITHUB_TOKEN` (with `pull-requests: read`).
+Without a token the notes come from the commits, as before. Custom templates (`template`/`template_file`) receive the
+notes as `extra.release_notes` (a list of `{ body, pr_number, pr_title, pr_url, author, comment_url }`). They still
+get every commit, with `commit.extra.replaced` set on the ones the notes replace, so a template that ignores PR notes
+renders as before:
+
+```jinja
+{% for note in extra.release_notes %}
+{{ note.body }}
+{% endfor %}
+{% for group, commits in commits | filter(attribute="extra.replaced", value=false) | group_by(attribute="group") %}
+…
+{% endfor %}
+```
+
+Known limit: squash-merging the release PR (`develop` → `main`) leaves a single commit, so only the release PR's own
+notes apply. Use a merge commit for release PRs.
 
 ## How It Works
 
@@ -585,6 +673,16 @@ treated as skipped; this is how already-published private packages are detected 
 for example with trusted publishing and no `NODE_AUTH_TOKEN`. A version that is already staged
 (`cannot publish over previously staged version`) is skipped the same way and listed as awaiting approval: `npm view`
 cannot see staged versions, so a re-run only finds out when staging (or publishing) it again.
+
+#### `release_notes`
+
+[Release notes drafted in PR comments](#release-notes-from-pr-comments).
+
+```yaml
+release_notes:
+  pr_comments: true # read `@super-release release-notes` comments (needs GITHUB_TOKEN)
+  trusted_authors: [OWNER, MEMBER, COLLABORATOR] # GitHub author associations whose comments count
+```
 
 ## Monorepo Support
 

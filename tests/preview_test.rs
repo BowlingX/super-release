@@ -117,3 +117,67 @@ fn preview_reports_no_release_for_non_bumping_commits() {
 
     assert!(is_clean(root), "preview mutated the repository");
 }
+
+/// A previewed PR controls its config: a changelog template must not be able to
+/// read the environment (and post a token in the preview comment).
+#[test]
+fn preview_refuses_templates_that_read_the_environment() {
+    let dir = setup_repo();
+    let root = dir.path();
+
+    fs::write(
+        root.join(".release.yaml"),
+        "branches: [main]\nsteps:\n  - name: changelog\n    options:\n      template: \"LEAK {{ get_env(name=\x27SR_PREVIEW_SECRET\x27) }}\"\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("packages/core/src/index.ts"),
+        "export const y = 2;",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat(core): add y"]);
+
+    super_release_bin()
+        .current_dir(root)
+        .env("SR_PREVIEW_SECRET", "s3cr3t-value")
+        .args(["--preview", "--base", "main", "--no-comment"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("s3cr3t-value").not())
+        .stdout(predicate::str::contains("<details>"))
+        .stderr(predicate::str::contains("get_env"));
+}
+
+/// `template_file` must stay inside the repository.
+#[test]
+fn preview_ignores_template_files_outside_the_repo() {
+    let dir = setup_repo();
+    let root = dir.path();
+    let outside = TempDir::new().unwrap();
+    let secret = outside.path().join("secret.tera");
+    fs::write(&secret, "s3cr3t-file").unwrap();
+
+    fs::write(
+        root.join(".release.yaml"),
+        format!(
+            "branches: [main]\nsteps:\n  - name: changelog\n    options:\n      template_file: \x27{}\x27\n",
+            secret.display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        root.join("packages/core/src/index.ts"),
+        "export const y = 2;",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat(core): add y"]);
+
+    super_release_bin()
+        .current_dir(root)
+        .args(["--preview", "--base", "main", "--no-comment"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("s3cr3t-file").not());
+}
