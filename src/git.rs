@@ -324,14 +324,12 @@ pub fn check_branch_up_to_date(
     repo: &Repository,
     branch_name: &str,
 ) -> Result<()> {
-    let local_ref = match repo.find_branch(branch_name, git2::BranchType::Local) {
-        Ok(b) => b,
-        Err(_) => return Ok(()),
+    let Ok(local_ref) = repo.find_branch(branch_name, git2::BranchType::Local) else {
+        return Ok(());
     };
 
-    let upstream = match local_ref.upstream() {
-        Ok(u) => u,
-        Err(_) => return Ok(()),
+    let Ok(upstream) = local_ref.upstream() else {
+        return Ok(());
     };
 
     let upstream_name = upstream.get().name().unwrap_or("");
@@ -364,9 +362,8 @@ pub fn check_branch_up_to_date(
 
     // Re-read upstream after fetch
     let local_ref = repo.find_branch(branch_name, git2::BranchType::Local)?;
-    let upstream = match local_ref.upstream() {
-        Ok(u) => u,
-        Err(_) => return Ok(()),
+    let Ok(upstream) = local_ref.upstream() else {
+        return Ok(());
     };
 
     let local_oid = local_ref.get().peel_to_commit()?.id();

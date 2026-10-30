@@ -24,6 +24,11 @@ use clap::Parser;
 use cli::Cli;
 use console::style;
 
+#[expect(
+    clippy::too_many_lines,
+    clippy::cognitive_complexity,
+    reason = "predates the limit; split when next touched"
+)]
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -165,21 +170,18 @@ fn main() -> Result<()> {
         return run::run_preview(&cli, &repo, &repo_root, &cfg, &packages);
     }
 
-    let branch_ctx = match config::resolve_branch_context(&repo, &cfg)? {
-        Some(ctx) => ctx,
-        None => {
-            let head = repo
-                .head()
-                .ok()
-                .and_then(|h| h.shorthand().ok().map(String::from));
-            let branch = head.as_deref().unwrap_or("HEAD");
-            printfl!(
-                "{} Branch '{}' is not configured for releases, skipping.",
-                style(">>").bold().yellow(),
-                style(branch).bold()
-            );
-            return Ok(());
-        }
+    let Some(branch_ctx) = config::resolve_branch_context(&repo, &cfg)? else {
+        let head = repo
+            .head()
+            .ok()
+            .and_then(|h| h.shorthand().ok().map(String::from));
+        let branch = head.as_deref().unwrap_or("HEAD");
+        printfl!(
+            "{} Branch '{}' is not configured for releases, skipping.",
+            style(">>").bold().yellow(),
+            style(branch).bold()
+        );
+        return Ok(());
     };
 
     if !cli.dry_run && !quiet {
@@ -317,16 +319,13 @@ fn main() -> Result<()> {
             continue;
         }
 
-        let p = match step::create_step(&step_cfg.name) {
-            Some(p) => p,
-            None => {
-                eprintln!(
-                    "{} Unknown step: {}",
-                    style("warning:").yellow().bold(),
-                    step_cfg.name
-                );
-                continue;
-            }
+        let Some(p) = step::create_step(&step_cfg.name) else {
+            eprintln!(
+                "{} Unknown step: {}",
+                style("warning:").yellow().bold(),
+                step_cfg.name
+            );
+            continue;
         };
 
         let _section = output::section(format!("Running step: {}", style(p.name()).bold()));

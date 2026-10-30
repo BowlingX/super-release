@@ -8,6 +8,10 @@ use crate::forge::Forge;
 use crate::{config, forge, git, output, package, pr_notes, preview, step, version};
 
 /// Core git finalize: stage modified files, commit, tag, optionally push.
+#[expect(
+    clippy::too_many_lines,
+    reason = "predates the limit; split when next touched"
+)]
 pub fn finalize_git(
     repo_root: &std::path::Path,
     repo: &git2::Repository,

@@ -1,0 +1,8 @@
+{
+  "path": ["."],
+  "format": ["rust"],
+  "ignore": ["tests/**"],
+  "threshold": 2,
+  "reporters": ["console"],
+  "gitignore": true
+}
