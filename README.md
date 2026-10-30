@@ -13,6 +13,7 @@ update `package.json` files, publish to npm, and create git tags -- across all p
 - Maintenance branches (`1.x`, `2.x`) with major-version capping
 - Changelog generation powered by [git-cliff](https://git-cliff.org/)
 - Auto-detects package manager (npm, yarn, pnpm)
+- npm staged publishing: stage releases from CI, approve them with 2FA
 - Configurable tag format templates
 - Build in steps: changelog, npm, exec
 - Global file dependencies and ignore patterns
@@ -474,6 +475,7 @@ steps:
       publish_args: ['--otp=123456']
       package_manager: yarn # force specific PM (default: auto-detect)
       check_registry: true # check if version exists before publishing (default: true)
+      staged: false # stage for maintainer approval instead of publishing (default: false)
 
   - name: exec
     packages: ['my-rust-lib']
@@ -514,12 +516,27 @@ Each step can be scoped:
 - **`branches`** -- glob patterns for branch names this step runs on. If empty, the step runs on all branches.
   For example, `branches: ["main"]` ensures a step only runs on the main branch.
 
-| Step        | Prepare/Publish                                        | Release (after tags are pushed)                          |
-| ----------- | ------------------------------------------------------ | -------------------------------------------------------- |
-| `changelog` | Generates/updates changelog per package (parallel)     | --                                                       |
-| `npm`       | Publishes packages (parallel within dependency levels) | --                                                       |
-| `exec`      | Runs custom shell command per package                  | --                                                       |
-| `github`    | --                                                     | Creates a GitHub Release per package with its notes + assets |
+| Step        | Prepare/Publish                                                  | Release (after tags are pushed)                              |
+| ----------- | ---------------------------------------------------------------- | ------------------------------------------------------------ |
+| `changelog` | Generates/updates changelog per package (parallel)               | --                                                           |
+| `npm`       | Publishes or stages packages (parallel within dependency levels) | --                                                           |
+| `exec`      | Runs custom shell command per package                            | --                                                           |
+| `github`    | --                                                               | Creates a GitHub Release per package with its notes + assets |
+
+With `staged: true`, the `npm` step uses npm's [staged publishing](https://docs.npmjs.com/staged-publishing/):
+packages are uploaded to the registry's stage queue (`npm stage publish`, `pnpm stage publish`, or
+`yarn npm publish --staged`) and only go live once a maintainer approves them with 2FA, on npmjs.com or with the
+`stage approve` command the step prints. Staging needs no 2FA, so it works from CI with trusted publishing, whose
+settings can also allow staged publishes only. Requires npm 11.15+ (Node 22.14+), pnpm 11.3+ or yarn 4.16+; the step
+checks the version before publishing.
+
+- The step lists the staged versions in dependency order with their approve commands. Approve them in that order:
+  the registry does not check that a dependency is live, so a dependent approved first fails to install (or resolves
+  an older version of its dependency) until the dependency is approved too.
+- Releases are tagged once staged, since the version is already taken. If a maintainer rejects a staged version,
+  release a new version (or delete its tag to release the same one again).
+- Staging a package that does not exist on the registry yet publishes a public `0.0.0-stage` placeholder version.
+- The `github` step still creates its Releases right away, before the packages are approved.
 
 Package version bumps (`package.json`) happen automatically before steps run (part of core).
 Steps return the files they modified. The core git step stages exactly those files for the commit -- no `git add .`.
@@ -565,7 +582,9 @@ Tags are idempotent -- existing tags are skipped. The npm step checks the regist
 skips versions that already exist. Non-404 errors (auth, network) abort the release to prevent partial publishes.
 A publish the registry rejects as already published (`cannot publish over the previously published versions`) is also
 treated as skipped; this is how already-published private packages are detected when `npm view` has no read access,
-for example with trusted publishing and no `NODE_AUTH_TOKEN`.
+for example with trusted publishing and no `NODE_AUTH_TOKEN`. A version that is already staged
+(`cannot publish over previously staged version`) is skipped the same way and listed as awaiting approval: `npm view`
+cannot see staged versions, so a re-run only finds out when staging (or publishing) it again.
 
 ## Monorepo Support
 
@@ -608,7 +627,9 @@ exclude:
 
 Packages that depend on each other (via `dependencies` or `devDependencies` in `package.json`) are published in
 dependency order. If `@acme/utils` depends on `@acme/core`, core is published first. Independent packages publish in
-parallel.
+parallel. If a package fails to publish, the packages depending on it at runtime (`dependencies` or
+`optionalDependencies`) are skipped, so none goes live pointing at a version that does not exist; the step fails, and a
+re-run publishes them.
 
 ### Global file dependencies
 

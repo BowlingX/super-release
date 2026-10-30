@@ -65,7 +65,8 @@ impl CommandFailure {
 }
 
 /// Run a command, streaming output live: a per-task spinner on TTY, prefixed lines in CI.
-pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<(), CommandFailure> {
+/// Returns the captured output lines so callers can parse results (e.g. a stage id).
+pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<Vec<String>, CommandFailure> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let context = format!("[{}] {}", opts.step_name, opts.label);
@@ -154,7 +155,7 @@ pub fn run_command(mut cmd: Command, opts: &RunOptions) -> Result<(), CommandFai
         ));
     }
 
-    Ok(())
+    Ok(output)
 }
 
 fn stream_lines<R: std::io::Read>(
