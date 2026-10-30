@@ -280,8 +280,8 @@ fn github_api_url(
         .or_else(|| forge.api_base_uri(repo_ref))
 }
 
-/// The run's GitHub metadata, looked up once before any step runs. `None` without
-/// a token or when no step on this branch renders notes.
+/// The run's GitHub metadata, looked up once before any step runs, for the
+/// packages whose notes a step renders. `None` without a token or such a package.
 pub fn fetch_release_metadata(
     repo: &git2::Repository,
     cfg: &config::Config,
@@ -289,19 +289,10 @@ pub fn fetch_release_metadata(
     releases: &[version::PackageRelease],
     dry_run: bool,
 ) -> Option<pr_notes::ReleaseMetadata> {
-    let renders_notes = |name: &str| {
-        cfg.steps.iter().any(|s| {
-            s.name == name
-                && step_runs_on_branch(s, &branch_ctx.branch_name)
-                && releases
-                    .iter()
-                    .any(|r| step_covers_package(s, &r.package_name))
-        })
-    };
     // The github step renders nothing in a dry run or without a push.
-    let github_publishes = !dry_run && cfg.git.push && renders_notes("github");
-    let changelog_uses_notes = cfg.release_notes.pr_comments && renders_notes("changelog");
-    if !github_publishes && !changelog_uses_notes {
+    let github_publishes = !dry_run && cfg.git.push;
+    let noted = noted_releases(cfg, &branch_ctx.branch_name, releases, github_publishes);
+    if noted.is_empty() {
         return None;
     }
     let forge = forge::github::GitHubForge;
@@ -316,12 +307,12 @@ pub fn fetch_release_metadata(
         api_url.as_deref(),
         &gh_repo,
         cfg,
-        releases,
+        &noted,
         git::head_sha(repo).as_deref(),
         None,
     )?;
 
-    let mut from_prs: Vec<i64> = releases
+    let mut from_prs: Vec<i64> = noted
         .iter()
         .filter_map(|r| meta.notes_for(&r.package_name))
         .flat_map(|n| &n.blocks)
@@ -425,9 +416,10 @@ pub fn run_preview(
     // Only preview notes for packages a `changelog` step would cover on this branch, mirroring the per-step branch + package filtering.
     let notes_packages: std::collections::HashSet<String> = releases
         .iter()
-        .filter(|r| changelog_covers(cfg, &base_branch, &r.package_name))
+        .filter(|r| step_covers(cfg, "changelog", &base_branch, &r.package_name))
         .map(|r| r.package_name.clone())
         .collect();
+    let noted = noted_releases(cfg, &base_branch, &releases, true);
 
     let changelog_template = preview_changelog_template(repo_root, cfg, &base_branch);
 
@@ -440,7 +432,7 @@ pub fn run_preview(
                 r.api_url.as_deref(),
                 &r.repo_ref,
                 cfg,
-                &releases,
+                &noted,
                 // The PR head isn't merged yet, and previews credit no contributors.
                 None,
                 r.pr_id.parse().ok(),
@@ -479,7 +471,7 @@ pub fn run_preview(
     if let (Some(comment_id), Some(meta)) =
         (pr_ctx.as_ref().and_then(|c| c.comment_id), meta.as_ref())
     {
-        react_to_directive(forge.as_ref(), &r, comment_id, meta, &releases);
+        react_to_directive(forge.as_ref(), &r, comment_id, meta);
     }
 
     Ok(())
@@ -549,9 +541,8 @@ fn react_to_directive(
     r: &PreviewRemote,
     comment_id: u64,
     meta: &pr_notes::ReleaseMetadata,
-    releases: &[version::PackageRelease],
 ) {
-    let Some(found) = pr_notes::directive_comments(meta, releases)
+    let Some(found) = pr_notes::directive_comments(meta)
         .into_iter()
         .find(|d| d.comment.id == comment_id)
     else {
@@ -632,11 +623,34 @@ fn step_covers_package(step_cfg: &config::StepConfig, package_name: &str) -> boo
             .any(|pat| config::glob_match(pat, package_name))
 }
 
-/// Whether a `changelog` step would generate notes for this package on this
-/// branch — mirrors the per-step branch + package filtering used at release time.
-fn changelog_covers(cfg: &config::Config, branch_name: &str, package_name: &str) -> bool {
+/// The releases whose notes a step renders from the GitHub metadata: the
+/// `changelog` step with PR comments on, and the `github` step if `github`.
+fn noted_releases(
+    cfg: &config::Config,
+    branch_name: &str,
+    releases: &[version::PackageRelease],
+    github: bool,
+) -> Vec<version::PackageRelease> {
+    releases
+        .iter()
+        .filter(|r| {
+            let covers = |step| step_covers(cfg, step, branch_name, &r.package_name);
+            (github && covers("github")) || (cfg.release_notes.pr_comments && covers("changelog"))
+        })
+        .cloned()
+        .collect()
+}
+
+/// Whether a `step_name` step runs for this package on this branch — mirrors the
+/// per-step branch + package filtering used at release time.
+fn step_covers(
+    cfg: &config::Config,
+    step_name: &str,
+    branch_name: &str,
+    package_name: &str,
+) -> bool {
     cfg.steps.iter().any(|s| {
-        s.name == "changelog"
+        s.name == step_name
             && step_runs_on_branch(s, branch_name)
             && step_covers_package(s, package_name)
     })
@@ -680,4 +694,50 @@ pub fn run_release_phase(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commit::BumpLevel;
+
+    fn release(name: &str) -> version::PackageRelease {
+        version::PackageRelease {
+            package_name: name.into(),
+            current_version: semver::Version::new(1, 0, 0),
+            next_version: semver::Version::new(1, 1, 0),
+            bump: BumpLevel::Minor,
+            commits: vec![],
+            is_root: false,
+            propagated_from: None,
+        }
+    }
+
+    fn names(releases: &[version::PackageRelease]) -> Vec<&str> {
+        releases.iter().map(|r| r.package_name.as_str()).collect()
+    }
+
+    /// Only packages a `changelog` or `github` step covers get PR notes.
+    #[test]
+    fn noted_releases_follow_the_notes_steps() {
+        let cfg: config::Config = serde_saphyr::from_str(
+            "branches: [main]\n\
+             steps:\n\
+             - name: changelog\n  packages: [root]\n\
+             - name: github\n  packages: [cli]\n\
+             - name: npm\n  packages: [cli, cli-linux-x64]\n",
+        )
+        .unwrap();
+        let releases = [release("root"), release("cli"), release("cli-linux-x64")];
+
+        assert_eq!(
+            names(&noted_releases(&cfg, "main", &releases, true)),
+            ["root", "cli"]
+        );
+        // Without a published GitHub release, only the changelog renders notes.
+        assert_eq!(
+            names(&noted_releases(&cfg, "main", &releases, false)),
+            ["root"]
+        );
+    }
 }

@@ -28,7 +28,7 @@ pub fn render_preview_markdown(
     if releases.is_empty() {
         out.push_str("No release will be triggered by this pull request.\n");
         if let Some(meta) = meta {
-            render_ignored_directives(&mut out, meta, &[]);
+            render_ignored_directives(&mut out, meta);
         }
         return out;
     }
@@ -71,7 +71,7 @@ pub fn render_preview_markdown(
 
     if let Some(meta) = meta {
         render_note_sources(&mut out, releases, meta);
-        render_ignored_directives(&mut out, meta, releases);
+        render_ignored_directives(&mut out, meta);
     }
 
     out.push_str(
@@ -120,13 +120,9 @@ fn render_note_sources(out: &mut String, releases: &[PackageRelease], meta: &Rel
 }
 
 /// Directive comments that don't count, and why.
-fn render_ignored_directives(
-    out: &mut String,
-    meta: &ReleaseMetadata,
-    releases: &[PackageRelease],
-) {
+fn render_ignored_directives(out: &mut String, meta: &ReleaseMetadata) {
     let mut any = false;
-    for found in pr_notes::directive_comments(meta, releases) {
+    for found in pr_notes::directive_comments(meta) {
         let Some(reason) = found.ignored else {
             continue;
         };
@@ -137,7 +133,7 @@ fn render_ignored_directives(
                 found.comment.association
             ),
             IgnoreReason::UnknownPackage(target) => {
-                format!("no released package matches `{target}`")
+                format!("no released package with release notes matches `{target}`")
             }
         };
         let _ = writeln!(

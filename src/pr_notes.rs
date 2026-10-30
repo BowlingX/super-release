@@ -242,7 +242,7 @@ fn package_notes(release: &PackageRelease, meta: &ReleaseMetadata) -> PackageNot
 pub enum IgnoreReason {
     /// The author's association isn't in `release_notes.trusted_authors`.
     Untrusted,
-    /// The target matches no released package.
+    /// The target matches no released package that gets release notes.
     UnknownPackage(String),
 }
 
@@ -255,10 +255,7 @@ pub struct DirectiveComment<'a> {
 }
 
 /// Every directive comment on the run's PRs, and why it is ignored, if it is.
-pub fn directive_comments<'a>(
-    meta: &'a ReleaseMetadata,
-    releases: &[PackageRelease],
-) -> Vec<DirectiveComment<'a>> {
+pub fn directive_comments(meta: &ReleaseMetadata) -> Vec<DirectiveComment<'_>> {
     meta.pull_requests
         .iter()
         .flat_map(|pr| pr.comments.iter().map(move |c| (pr.number, c)))
@@ -267,7 +264,7 @@ pub fn directive_comments<'a>(
             let ignored = if is_trusted(comment, &meta.trusted_authors) {
                 directive
                     .target
-                    .filter(|t| !releases.iter().any(|r| targets(t, &r.package_name)))
+                    .filter(|t| !meta.notes.keys().any(|p| targets(t, p)))
                     .map(IgnoreReason::UnknownPackage)
             } else {
                 Some(IgnoreReason::Untrusted)
@@ -441,6 +438,16 @@ mod tests {
         }
     }
 
+    /// `meta` with notes resolved for `releases`, as the run builds it.
+    fn resolved(meta: ReleaseMetadata, releases: &[PackageRelease]) -> ReleaseMetadata {
+        ReleaseMetadata::new(
+            meta.attribution,
+            meta.pull_requests,
+            meta.trusted_authors,
+            releases,
+        )
+    }
+
     fn numbers(notes: &PackageNotes) -> Vec<i64> {
         notes.blocks.iter().map(|b| b.pr_number).collect()
     }
@@ -571,7 +578,8 @@ mod tests {
         let notes = package_notes(&release, &meta);
         assert_eq!(notes.blocks[0].body, "real");
 
-        let found = directive_comments(&meta, std::slice::from_ref(&release));
+        let meta = resolved(meta, std::slice::from_ref(&release));
+        let found = directive_comments(&meta);
         assert_eq!(found.len(), 2);
         assert_eq!(found[0].ignored, None);
         assert_eq!(found[1].ignored, Some(IgnoreReason::Untrusted));
@@ -683,7 +691,8 @@ mod tests {
             )],
         );
 
-        let found = directive_comments(&meta, &[release("@acme/ui", vec![])]);
+        let meta = resolved(meta, &[release("@acme/ui", vec![])]);
+        let found = directive_comments(&meta);
         assert_eq!(
             found[0].ignored,
             Some(IgnoreReason::UnknownPackage("typo".into()))
