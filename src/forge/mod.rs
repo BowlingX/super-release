@@ -28,6 +28,17 @@ impl RepoRef {
 pub struct PrContext {
     pub id: String,
     pub base_ref: Option<String>,
+    /// The comment that triggered the run (comment events), to acknowledge it.
+    pub comment_id: Option<u64>,
+}
+
+/// How a release-notes directive comment is acknowledged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentReaction {
+    /// Picked up for the release notes.
+    Seen,
+    /// Ignored (untrusted author or unknown package).
+    Confused,
 }
 
 /// The outcome of an upsert: a new resource created, an existing one updated, or
@@ -95,6 +106,26 @@ pub trait Forge: Send + Sync {
         marker: &str,
         body: &str,
     ) -> Result<UpsertAction>;
+
+    /// The base branch of a pull/merge request, for events that don't carry it
+    /// (e.g. comment events).
+    fn pull_request_base_ref(
+        &self,
+        token: &str,
+        api_url: Option<&str>,
+        repo: &RepoRef,
+        id: &str,
+    ) -> Result<String>;
+
+    /// React to a PR/MR comment (idempotent: an existing reaction is kept).
+    fn react_to_comment(
+        &self,
+        token: &str,
+        api_url: Option<&str>,
+        repo: &RepoRef,
+        comment_id: u64,
+        reaction: CommentReaction,
+    ) -> Result<()>;
 
     /// Create or update (idempotent) a release per plan. Returns each release's
     /// tag and whether it was created or updated.

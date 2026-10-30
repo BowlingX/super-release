@@ -1,0 +1,6 @@
+{%- if extra.release_notes %}
+### ✍️ Release notes
+{% for note in extra.release_notes %}
+{{ note.body }}
+{% endfor %}
+{%- endif %}

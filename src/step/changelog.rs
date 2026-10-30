@@ -98,7 +98,14 @@ impl Step for ChangelogStep {
                 let notes = if changelog_contains_version(&existing, &next_version) {
                     None
                 } else {
-                    Some(generate_release_notes(release, template.as_deref())?)
+                    let pr_notes = ctx
+                        .release_meta
+                        .and_then(|m| m.notes_for(&release.package_name));
+                    Some(generate_release_notes(
+                        release,
+                        template.as_deref(),
+                        pr_notes,
+                    )?)
                 };
 
                 Ok(PreparedChangelog {
@@ -221,7 +228,7 @@ mod tests {
             propagated_from: None,
         };
 
-        let notes = generate_release_notes(&release, None).unwrap();
+        let notes = generate_release_notes(&release, None, None).unwrap();
         assert!(
             changelog_contains_version(&notes, "1.1.0"),
             "generated notes no longer match the expected heading format:\n{}",

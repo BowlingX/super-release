@@ -1,0 +1,7 @@
+{% if version %}## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}## [unreleased]
+{% endif %}{# release-notes #}{% for group, commits in commits | filter(attribute="extra.replaced", value=false) | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }}{% endfor %}
+{% endfor %}{# dependency-update #}

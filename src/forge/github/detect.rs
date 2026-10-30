@@ -46,13 +46,30 @@ pub(super) fn pr_context_from_event(json: &serde_json::Value) -> Option<PrContex
         return Some(PrContext {
             id: number.to_string(),
             base_ref,
+            comment_id: None,
         });
     }
-    // e.g. `issue_comment` events carry the number at the top level.
+    // `issue_comment` fires for issues and PRs alike; only a PR's issue carries
+    // `pull_request`. The base ref isn't in the payload.
+    if let Some(issue) = json.get("issue")
+        && issue.get("pull_request").is_some()
+        && let Some(number) = issue.get("number").and_then(serde_json::Value::as_u64)
+    {
+        return Some(PrContext {
+            id: number.to_string(),
+            base_ref: None,
+            comment_id: json
+                .get("comment")
+                .and_then(|c| c.get("id"))
+                .and_then(serde_json::Value::as_u64),
+        });
+    }
+    // Other PR events without a `pull_request` object carry the number at the top level.
     if let Some(number) = json.get("number").and_then(serde_json::Value::as_u64) {
         return Some(PrContext {
             id: number.to_string(),
             base_ref: None,
+            comment_id: None,
         });
     }
     None
@@ -71,7 +88,8 @@ mod tests {
             pr_context_from_event(&json),
             Some(PrContext {
                 id: "42".into(),
-                base_ref: Some("main".into())
+                base_ref: Some("main".into()),
+                comment_id: None,
             })
         );
     }
@@ -83,9 +101,37 @@ mod tests {
             pr_context_from_event(&json),
             Some(PrContext {
                 id: "7".into(),
-                base_ref: None
+                base_ref: None,
+                comment_id: None,
             })
         );
+    }
+
+    #[test]
+    fn pr_context_from_pr_comment_event() {
+        let json = serde_json::json!({
+            "action": "created",
+            "issue": { "number": 12, "pull_request": { "url": "https://api.github.com/x" } },
+            "comment": { "id": 99, "body": "@super-release release-notes" }
+        });
+        assert_eq!(
+            pr_context_from_event(&json),
+            Some(PrContext {
+                id: "12".into(),
+                base_ref: None,
+                comment_id: Some(99),
+            })
+        );
+    }
+
+    /// A comment on a plain issue isn't a PR context.
+    #[test]
+    fn issue_comment_on_an_issue_is_not_a_pr() {
+        let json = serde_json::json!({
+            "issue": { "number": 12 },
+            "comment": { "id": 99 }
+        });
+        assert_eq!(pr_context_from_event(&json), None);
     }
 
     #[test]

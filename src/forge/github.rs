@@ -8,13 +8,14 @@ pub mod metadata;
 use anyhow::Result;
 
 use super::{
-    Forge, IssueComment, PrContext, ReleasePlan, RepoRef, UpsertAction, block_on, parse_repo_url,
+    CommentReaction, Forge, IssueComment, PrContext, ReleasePlan, RepoRef, UpsertAction, block_on,
+    parse_repo_url,
 };
 use api::{all_issue_comments, build_client, find_draft_release, upload_assets};
 use detect::{is_github_dot_com, numeric_id, pr_context_from_event, repo_from_env};
 
 pub(crate) use links::release_url;
-use metadata::ReleaseAttribution;
+use metadata::{PullRequestInfo, ReleaseAttribution};
 
 pub struct GitHubForge;
 
@@ -36,6 +37,35 @@ impl GitHubForge {
             let client =
                 build_client(token, metadata::graphql_base_uri(api_url).as_deref()).await?;
             metadata::release_attribution(&client, repo, head, shas).await
+        })
+    }
+
+    /// Comments and commits of the attributed PRs, the PRs containing `head`, and `extra`.
+    pub fn release_pull_requests(
+        &self,
+        token: &str,
+        api_url: Option<&str>,
+        repo: &RepoRef,
+        attribution: &ReleaseAttribution,
+        head: Option<&str>,
+        extra: Option<i64>,
+    ) -> Result<Vec<PullRequestInfo>> {
+        block_on(async move {
+            let client =
+                build_client(token, metadata::graphql_base_uri(api_url).as_deref()).await?;
+            let mut numbers: Vec<i64> = attribution
+                .commits
+                .values()
+                .flat_map(|c| c.pull_requests.iter().map(|pr| pr.number))
+                .chain(extra)
+                .collect();
+            // A released head commit's PRs are already attributed.
+            if let Some(head) = head.filter(|h| !attribution.commits.contains_key(*h)) {
+                numbers.extend(metadata::head_pull_requests(&client, repo, head).await?);
+            }
+            numbers.sort_unstable();
+            numbers.dedup();
+            metadata::pull_requests(&client, repo, &numbers).await
         })
     }
 }
@@ -89,6 +119,7 @@ impl Forge for GitHubForge {
             return Some(PrContext {
                 id: num.to_string(),
                 base_ref,
+                comment_id: None,
             });
         }
 
@@ -140,6 +171,44 @@ impl Forge for GitHubForge {
                 issues.create_comment(number, body).await?;
                 Ok(UpsertAction::Created)
             }
+        })
+    }
+
+    fn pull_request_base_ref(
+        &self,
+        token: &str,
+        api_url: Option<&str>,
+        repo: &RepoRef,
+        id: &str,
+    ) -> Result<String> {
+        let number = numeric_id(id)?;
+        block_on(async move {
+            let client = build_client(token, api_url).await?;
+            let pr = client.pulls(&repo.owner, &repo.repo).get(number).await?;
+            Ok(pr.base.ref_field)
+        })
+    }
+
+    fn react_to_comment(
+        &self,
+        token: &str,
+        api_url: Option<&str>,
+        repo: &RepoRef,
+        comment_id: u64,
+        reaction: CommentReaction,
+    ) -> Result<()> {
+        use octocrab::models::reactions::ReactionContent;
+        let content = match reaction {
+            CommentReaction::Seen => ReactionContent::Eyes,
+            CommentReaction::Confused => ReactionContent::Confused,
+        };
+        block_on(async move {
+            let client = build_client(token, api_url).await?;
+            client
+                .issues(&repo.owner, &repo.repo)
+                .create_comment_reaction(comment_id, content)
+                .await?;
+            Ok(())
         })
     }
 

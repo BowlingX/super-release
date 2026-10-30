@@ -389,6 +389,12 @@ pub fn check_branch_up_to_date(
     Ok(())
 }
 
+/// The full SHA of the commit HEAD points at; `None` on an unborn branch.
+pub fn head_sha(repo: &Repository) -> Option<String> {
+    let commit = repo.head().ok()?.peel_to_commit().ok()?;
+    Some(commit.id().to_string())
+}
+
 pub fn create_tag(repo: &Repository, tag_name: &str, message: &str) -> Result<()> {
     let head = repo.head()?.peel_to_commit()?;
     let sig = repo.signature()?;

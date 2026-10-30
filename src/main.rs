@@ -10,6 +10,7 @@ mod notes;
 mod output;
 mod package;
 mod pm;
+mod pr_notes;
 mod preview;
 mod resolver;
 mod run;
@@ -287,6 +288,10 @@ fn main() -> Result<()> {
     }
     printfl!();
 
+    // Before anything is mutated; shared by the changelog and github steps.
+    let release_meta =
+        run::fetch_release_metadata(&repo, &cfg, &branch_ctx, &releases, cli.dry_run);
+
     let mut modified_files = {
         let _section = output::section("Bumping package versions");
         pkg_resolver.bump_versions(&repo_root, &packages, &releases, cli.dry_run)?
@@ -297,6 +302,7 @@ fn main() -> Result<()> {
         dry_run: cli.dry_run,
         branch: &branch_ctx,
         cfg: &cfg,
+        release_meta: release_meta.as_ref(),
     };
 
     for step_cfg in &cfg.steps {
@@ -369,15 +375,15 @@ fn main() -> Result<()> {
     }
 
     // Publishes to external services (e.g. GitHub Releases) only after the commit and tags exist on the remote.
-    run::run_release_phase(
-        &repo_root,
-        &repo,
-        &cfg,
-        &branch_ctx,
-        &packages,
-        &releases,
-        cli.dry_run,
-    )?;
+    let release_ctx = step::ReleaseContext {
+        repo_root: &repo_root,
+        dry_run: cli.dry_run,
+        branch: &branch_ctx,
+        cfg: &cfg,
+        repo: &repo,
+        release_meta: release_meta.as_ref(),
+    };
+    run::run_release_phase(&release_ctx, &packages, &releases)?;
 
     if cli.dry_run {
         printfl!(

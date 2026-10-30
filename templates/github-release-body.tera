@@ -4,7 +4,8 @@
 ## [Unreleased]
 {%- endif %}
 {# dependency-update #}
-{%- for group, commits in commits | group_by(attribute="group") %}
+{# release-notes #}
+{%- for group, commits in commits | filter(attribute="extra.replaced", value=false) | group_by(attribute="group") %}
 ### {{ group | striptags | trim | upper_first }}
 {% for commit in commits %}
 - {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}[**breaking**] {% endif %}{{ commit.message | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}]({{ extra.repo_url }}/pull/{{ commit.remote.pr_number }}){% endif %}

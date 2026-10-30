@@ -12,6 +12,7 @@ use git_cliff_core::release::Release as CliffRelease;
 
 use crate::commit::ConventionalCommit;
 use crate::forge::github::metadata::ReleaseAttribution;
+use crate::pr_notes::PackageNotes;
 use crate::version::PackageRelease;
 
 /// Added to the built-in bodies: a release forced by a dependency bump has no
@@ -19,15 +20,12 @@ use crate::version::PackageRelease;
 const DEPENDENCY_UPDATE_NOTE: &str = include_str!("../templates/dependency-update.tera");
 const DEPENDENCY_UPDATE_MARKER: &str = "{# dependency-update #}";
 
-static CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
-    let mut config: CliffConfig = "".parse().expect("Failed to load git-cliff default config");
-    config.changelog.body = format!(
-        "{}{}\n",
-        config.changelog.body.trim_end(),
-        DEPENDENCY_UPDATE_NOTE.trim_end()
-    );
-    config
-});
+/// PR-comment release notes (`extra.release_notes`), above the commit groups.
+const RELEASE_NOTES_SECTION: &str = include_str!("../templates/release-notes.tera");
+const RELEASE_NOTES_MARKER: &str = "{# release-notes #}";
+
+/// git-cliff's default body, vendored to hold the markers.
+const CHANGELOG_BODY: &str = include_str!("../templates/changelog-body.tera");
 
 /// Compare/PR links use `extra.repo_url`/`extra.tag`/`extra.previous_tag` so they
 /// point at real tag names, not the bare version. Contributor credits are derived
@@ -35,13 +33,20 @@ static CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
 /// skipped by the commit parsers (e.g. `chore(deps)` bumps).
 const GITHUB_GROUPED_BODY: &str = include_str!("../templates/github-release-body.tera");
 
-/// Parsed once; the GitHub remote is set on the clone per release.
-static GITHUB_CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| {
+/// git-cliff's default config with one of our bodies, its markers filled in.
+fn cliff_config(body: &str) -> CliffConfig {
     let mut config: CliffConfig = "".parse().expect("Failed to load git-cliff default config");
-    config.changelog.body =
-        GITHUB_GROUPED_BODY.replace(DEPENDENCY_UPDATE_MARKER, DEPENDENCY_UPDATE_NOTE.trim_end());
+    config.changelog.body = body
+        .replace(DEPENDENCY_UPDATE_MARKER, DEPENDENCY_UPDATE_NOTE.trim_end())
+        .replace(RELEASE_NOTES_MARKER, RELEASE_NOTES_SECTION.trim_end());
     config
-});
+}
+
+static CLIFF_CONFIG: LazyLock<CliffConfig> = LazyLock::new(|| cliff_config(CHANGELOG_BODY));
+
+/// Parsed once; the GitHub remote is set on the clone per release.
+static GITHUB_CLIFF_CONFIG: LazyLock<CliffConfig> =
+    LazyLock::new(|| cliff_config(GITHUB_GROUPED_BODY));
 
 /// Uses the full commit SHA as the id because git-cliff matches commits to PRs by SHA.
 pub fn to_cliff_commits(commits: &[ConventionalCommit]) -> Vec<CliffCommit<'_>> {
@@ -57,25 +62,49 @@ pub fn to_cliff_commits(commits: &[ConventionalCommit]) -> Vec<CliffCommit<'_>> 
 }
 
 /// `template` overrides the default (grouped conventional) body.
-pub fn generate_release_notes(release: &PackageRelease, template: Option<&str>) -> Result<String> {
+pub fn generate_release_notes(
+    release: &PackageRelease,
+    template: Option<&str>,
+    notes: Option<&PackageNotes>,
+) -> Result<String> {
     let mut config = CLIFF_CONFIG.clone();
     if let Some(body) = template {
         config.changelog.body = body.to_string();
     }
-    render_changelog(config, plain_release(release))
+    render_changelog(config, plain_release(release, notes))
+}
+
+/// Flags commits whose line PR notes replace with `extra.replaced`; the built-in
+/// bodies skip them.
+fn release_commits<'a>(
+    release: &'a PackageRelease,
+    notes: Option<&PackageNotes>,
+) -> Vec<CliffCommit<'a>> {
+    let mut commits = to_cliff_commits(&release.commits);
+    for (cliff, commit) in commits.iter_mut().zip(&release.commits) {
+        let replaced = notes.is_some_and(|n| n.replaces(commit));
+        cliff.extra = Some(serde_json::json!({ "replaced": replaced }));
+    }
+    commits
 }
 
 /// Build a git-cliff release from ours, for offline (no-remote) rendering.
-fn plain_release(release: &PackageRelease) -> CliffRelease<'_> {
+fn plain_release<'a>(
+    release: &'a PackageRelease,
+    notes: Option<&PackageNotes>,
+) -> CliffRelease<'a> {
     CliffRelease {
         version: Some(release.next_version.to_string()),
-        commits: to_cliff_commits(&release.commits),
+        commits: release_commits(release, notes),
         timestamp: Some(chrono::Local::now().timestamp()),
         previous: Some(Box::new(CliffRelease {
             version: Some(release.current_version.to_string()),
             ..Default::default()
         })),
-        extra: Some(serde_json::json!({ "dependency_chain": &release.propagated_from })),
+        extra: Some(serde_json::json!({
+            "dependency_chain": &release.propagated_from,
+            "release_notes": notes.map(|n| &n.blocks),
+        })),
         ..Default::default()
     }
 }
@@ -113,6 +142,7 @@ pub fn generate_release_notes_with_github(
     tag: &str,
     previous_tag: &str,
     template: Option<&str>,
+    notes: Option<&PackageNotes>,
 ) -> Result<String> {
     let mut config = GITHUB_CLIFF_CONFIG.clone();
     if let Some(body) = template {
@@ -127,6 +157,7 @@ pub fn generate_release_notes_with_github(
         gh.web_url,
         tag,
         previous_tag,
+        notes,
     );
     if let Some(attribution) = attribution {
         attribute(&mut cliff_release, attribution);
@@ -141,7 +172,7 @@ fn attribute(release: &mut CliffRelease, attribution: &ReleaseAttribution) {
         let Some(found) = attribution.commits.get(&commit.id) else {
             continue;
         };
-        let pr = found.pull_request.as_ref();
+        let pr = found.pull_request();
         let contributor = RemoteContributor {
             username: found.login.clone(),
             pr_title: pr.map(|pr| pr.title.clone()),
@@ -176,23 +207,18 @@ fn enriched_release<'a>(
     web_url: &str,
     tag: &str,
     previous_tag: &str,
+    notes: Option<&PackageNotes>,
 ) -> CliffRelease<'a> {
     CliffRelease {
-        version: Some(release.next_version.to_string()),
-        commits: to_cliff_commits(&release.commits),
         commit_id: head_commit_id,
-        timestamp: Some(chrono::Local::now().timestamp()),
-        previous: Some(Box::new(CliffRelease {
-            version: Some(release.current_version.to_string()),
-            ..Default::default()
-        })),
         extra: Some(serde_json::json!({
             "repo_url": web_url,
             "tag": tag,
             "previous_tag": previous_tag,
             "dependency_chain": &release.propagated_from,
+            "release_notes": notes.map(|n| &n.blocks),
         })),
-        ..Default::default()
+        ..plain_release(release, notes)
     }
 }
 
@@ -215,6 +241,7 @@ fn render_changelog(mut config: CliffConfig, release: CliffRelease) -> Result<St
 mod tests {
     use super::*;
     use crate::commit::BumpLevel;
+    use crate::test_fixtures::oc;
 
     /// GitHub commit↔PR matching is by full SHA, so the commit id must be the full OID, not the short hash.
     #[test]
@@ -257,13 +284,18 @@ mod tests {
     }
 
     fn feat_commit() -> ConventionalCommit {
-        let mut commit =
-            crate::commit::parse_conventional_commit("12345678", "feat: add a thing").unwrap();
-        commit.oid = Some(git2::Oid::from_str(SHA).unwrap());
-        commit
+        oc(SHA, "feat: add a thing")
     }
 
     fn github_notes(release: &PackageRelease, attribution: Option<&ReleaseAttribution>) -> String {
+        github_notes_with(release, attribution, None)
+    }
+
+    fn github_notes_with(
+        release: &PackageRelease,
+        attribution: Option<&ReleaseAttribution>,
+        notes: Option<&PackageNotes>,
+    ) -> String {
         let gh = GithubContext {
             owner: "o",
             repo: "r",
@@ -271,8 +303,101 @@ mod tests {
             head_commit_id: None,
             web_url: "https://github.com/o/r",
         };
-        generate_release_notes_with_github(release, &gh, attribution, "p/v1.1.0", "p/v1.0.0", None)
-            .unwrap()
+        generate_release_notes_with_github(
+            release,
+            &gh,
+            attribution,
+            "p/v1.1.0",
+            "p/v1.0.0",
+            None,
+            notes,
+        )
+        .unwrap()
+    }
+
+    fn pr_notes(bodies: &[&str], replaced: &[&str]) -> PackageNotes {
+        PackageNotes {
+            blocks: bodies
+                .iter()
+                .enumerate()
+                .map(|(i, body)| crate::pr_notes::NoteBlock {
+                    pr_number: i as i64 + 14,
+                    pr_title: String::new(),
+                    pr_url: String::new(),
+                    author: Some("bob".into()),
+                    comment_url: String::new(),
+                    body: body.to_string(),
+                })
+                .collect(),
+            replaced: replaced.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    /// PR notes render above the commit groups and replace their PR's commit lines.
+    #[test]
+    fn pr_notes_replace_their_commits_in_both_bodies() {
+        let kept = oc("abcdef1234567890abcdef1234567890abcdef12", "fix: keep me");
+        let release = release_with(vec![feat_commit(), kept], None);
+        let notes = pr_notes(
+            &["**Plugin API**: you can now …", "- Faster\n- Smaller"],
+            &[SHA],
+        );
+        let github = github_notes_with(&release, Some(&octocat_attribution(false)), Some(&notes));
+        // The replaced commit's author is still credited.
+        assert!(
+            github.contains("### 👥 Contributors\n\n- @octocat"),
+            "{github}"
+        );
+
+        for rendered in [
+            generate_release_notes(&release, None, Some(&notes)).unwrap(),
+            github,
+        ] {
+            let section = rendered
+                .find("### ✍️ Release notes")
+                .unwrap_or_else(|| panic!("{rendered}"));
+            let first = rendered.find("**Plugin API**").unwrap();
+            let second = rendered.find("- Faster\n- Smaller").unwrap();
+            let kept_at = rendered
+                .find("Keep me")
+                .unwrap_or_else(|| panic!("{rendered}"));
+            assert!(rendered.find("## [1.1.0]").unwrap() < section, "{rendered}");
+            assert!(
+                section < first && first < second && second < kept_at,
+                "{rendered}"
+            );
+            assert!(
+                !rendered.contains("Add a thing"),
+                "replaced commit rendered:\n{rendered}"
+            );
+        }
+    }
+
+    /// Custom templates get every commit, flagged with `extra.replaced`.
+    #[test]
+    fn custom_templates_see_which_commits_pr_notes_replace() {
+        let kept = oc("abcdef1234567890abcdef1234567890abcdef12", "fix: keep me");
+        let release = release_with(vec![feat_commit(), kept], None);
+        let template = "{% for c in commits %}{{ c.message }}={{ c.extra.replaced }};{% endfor %}";
+        let rendered =
+            generate_release_notes(&release, Some(template), Some(&pr_notes(&["x"], &[SHA])))
+                .unwrap();
+        assert!(rendered.contains("add a thing=true;"), "{rendered}");
+        assert!(rendered.contains("keep me=false;"), "{rendered}");
+    }
+
+    /// No notes, no section: the generated notes are unchanged.
+    #[test]
+    fn empty_pr_notes_render_nothing() {
+        let release = release_with(vec![feat_commit()], None);
+        let none = generate_release_notes(&release, None, None).unwrap();
+        let empty = generate_release_notes(&release, None, Some(&PackageNotes::default())).unwrap();
+        assert_eq!(none, empty);
+        assert!(!none.contains("Release notes"), "{none}");
+        assert_eq!(
+            github_notes(&release, None),
+            github_notes_with(&release, None, Some(&PackageNotes::default()))
+        );
     }
 
     fn octocat_attribution(first_time: bool) -> ReleaseAttribution {
@@ -282,11 +407,12 @@ mod tests {
                 SHA.to_string(),
                 CommitAttribution {
                     login: Some("octocat".into()),
-                    pull_request: Some(PullRequestRef {
+                    pull_requests: vec![PullRequestRef {
                         number: 7,
                         title: "Add a thing".into(),
                         labels: vec![],
-                    }),
+                        merged_at: None,
+                    }],
                 },
             )]
             .into(),
@@ -333,7 +459,7 @@ mod tests {
         let release = release_with(vec![], Some(&["a", "b"]));
         let note = "Released because its dependency `b` was updated (via `a` → `b`).";
 
-        let changelog = generate_release_notes(&release, None).unwrap();
+        let changelog = generate_release_notes(&release, None, None).unwrap();
         assert!(changelog.contains(note), "{changelog}");
 
         let github = github_notes(&release, None);
@@ -343,13 +469,14 @@ mod tests {
             "{github}"
         );
 
-        let direct = generate_release_notes(&release_with(vec![], Some(&["a"])), None).unwrap();
+        let direct =
+            generate_release_notes(&release_with(vec![], Some(&["a"])), None, None).unwrap();
         assert!(
             direct.contains("Released because its dependency `a` was updated."),
             "{direct}"
         );
         assert!(
-            !generate_release_notes(&release_with(vec![feat_commit()], None), None)
+            !generate_release_notes(&release_with(vec![feat_commit()], None), None, None)
                 .unwrap()
                 .contains("Released because")
         );
@@ -389,6 +516,7 @@ mod tests {
             "https://github.com/o/r",
             "pkg/v1.1.0",
             "pkg/v1.0.0",
+            None,
         );
         let notes = render_offline(cliff);
 
@@ -537,6 +665,7 @@ mod tests {
             "https://github.com/o/r",
             "pkg/v1.1.1",
             "pkg/v1.1.0",
+            None,
         );
         let notes = render_offline(cliff);
 
@@ -562,7 +691,7 @@ mod tests {
             is_root: false,
             propagated_from: None,
         };
-        let notes = generate_release_notes(&release, Some("CUSTOM v{{ version }}")).unwrap();
+        let notes = generate_release_notes(&release, Some("CUSTOM v{{ version }}"), None).unwrap();
         assert!(
             notes.contains("CUSTOM v1.1.0"),
             "custom template not applied:\n{notes}"
