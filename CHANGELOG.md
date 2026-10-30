@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.17.0] - 2026-10-30
+
+### 🚀 Features
+
+- Added support for `npm stage publish` (#61)
 ## [1.16.0] - 2026-10-04
 
 ### 🚀 Features
