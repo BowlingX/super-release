@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.18.0] - 2026-10-30
+
+### ✍️ Release notes
+
+- **Release notes from PR comments**: comment `@super-release release-notes` (or `release-notes@<package>`) on a pull request, followed by Markdown, to replace the notes generated from its commits in CHANGELOG.md and the GitHub release.
+- The release preview shows the result and refreshes when such a comment is added, edited or deleted.
 ## [1.17.0] - 2026-10-30
 
 ### 🚀 Features
