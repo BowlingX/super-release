@@ -23,7 +23,7 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6.1.0
+      - uses: actions/checkout@v7.0.1
         with:
           # Full history + tags are required to compute version bumps.
           fetch-depth: 0
@@ -55,7 +55,7 @@ jobs:
     steps:
       # Comment events run with a write token even for fork PRs, so super-release is
       # built from the default branch and the PR is only read, never built or run.
-      - uses: actions/checkout@v6.1.0
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
