@@ -35,7 +35,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-TMPBASE=$(mktemp -d)
+# Resolved: `npm ci --prefix` rejects the lock file through a symlinked path
+# (macOS: /var -> /private/var).
+TMPBASE=$(cd "$(mktemp -d)" && pwd -P)
 
 # Install semantic-release from the pinned e2e/package.json + lock file.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -109,11 +111,13 @@ $yaml_content
 EOF
 }
 
+# Usage: git_commit <dir> <message> [file]
 git_commit() {
   local dir="$1"
   local msg="$2"
+  local file="${3:-changes.txt}"
   # Touch a file so there's always something to commit
-  echo "$msg" >> "$dir/changes.txt"
+  echo "$msg" >> "$dir/$file"
   git -C "$dir" add .
   git -C "$dir" commit -m "$msg" --quiet
 }
@@ -138,7 +142,8 @@ git_fetch_all() {
 
 # Results directory — each test writes its result to a file here
 RESULTS_DIR="$TMPBASE/results"
-mkdir -p "$RESULTS_DIR"
+PRINTED_DIR="$TMPBASE/printed"
+mkdir -p "$RESULTS_DIR" "$PRINTED_DIR"
 
 # Per-test globals (set by run_sr / run_ours, used by compare)
 SR_VERSION=""
@@ -162,9 +167,11 @@ run_sr() {
   fi
 }
 
+# Usage: run_ours <dir> [package]
 run_ours() {
   local dir="$1"
-  OUR_LAST_OUTPUT=$("$SUPER_RELEASE" --show-next-version -C "$dir" 2>&1) || true
+  local package="${2:-}"
+  OUR_LAST_OUTPUT=$("$SUPER_RELEASE" --show-next-version ${package:+--package "$package"} -C "$dir" 2>&1) || true
 
   if [ -z "$OUR_LAST_OUTPUT" ]; then
     OUR_VERSION="NO_RELEASE"
@@ -204,12 +211,14 @@ compare() {
 }
 
 # Assert that neither tool releases. SR reports NO_RELEASE; our
-# --show-next-version falls back to the package.json version (1.0.0).
+# --show-next-version falls back to the package.json version (default 1.0.0).
+# Usage: compare_no_release <name> [current]
 compare_no_release() {
   local name="$1"
+  local current="${2:-1.0.0}"
 
-  if [ "$SR_VERSION" = "NO_RELEASE" ] && [ "$OUR_VERSION" = "1.0.0" ]; then
-    report_result "$name" "PASS" "sr=NO_RELEASE, us=1.0.0 [current]"
+  if [ "$SR_VERSION" = "NO_RELEASE" ] && [ "$OUR_VERSION" = "$current" ]; then
+    report_result "$name" "PASS" "sr=NO_RELEASE, us=$current [current]"
   else
     local detail
     detail=$(printf "semantic-release: %s\nsuper-release: %s\n%s" "$SR_VERSION" "$OUR_VERSION" "$(echo "$SR_LAST_OUTPUT" | tail -10)")
@@ -943,6 +952,132 @@ steps: []'
   compare "prerelease 3rd increment (1.1.0-beta.3)"
 }
 
+# ── Release boundaries ───────────────────────────────────────────────
+#
+# semantic-release releases one package per run, so these scenarios compare
+# package `b` of a two-package repo: semantic-release through `tagFormat`,
+# super-release through `--package b`. Only `b` changes after `a`'s tag, so
+# semantic-release (which has no path filter) sees the same commits.
+
+# Two packages `a` and `b`, both tagged 1.0.0 on the first commit.
+setup_two_packages() {
+  local dir
+  dir=$(setup_repo)
+
+  cat > "$dir/.releaserc.json" << 'EOF'
+{
+  "branches": ["main"],
+  "tagFormat": "b-v${version}",
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator"
+  ]
+}
+EOF
+  # Listing the packages keeps the symlinked node_modules out of discovery:
+  # a package without a tag would make super-release read the full history.
+  write_our_config "$dir" "branches: [main]
+packages: [a, b]
+tag_format_package: '{name}-v{version}'
+steps: []"
+
+  mkdir -p "$dir/packages/a" "$dir/packages/b"
+  echo '{"name": "a", "version": "1.0.0"}' > "$dir/packages/a/package.json"
+  echo '{"name": "b", "version": "1.0.0"}' > "$dir/packages/b/package.json"
+  git -C "$dir" add .
+  git -C "$dir" commit -m "chore: init" --quiet
+  git_tag "$dir" "a-v1.0.0"
+  git_tag "$dir" "b-v1.0.0"
+
+  echo "$dir"
+}
+
+# Commit a `feat` to `b`, then tag its 1.1.0 on a commit with <message>.
+release_b() {
+  local dir="$1" msg="$2"
+  git_commit "$dir" "feat: change in b" packages/b/feature.txt
+  echo '{"name": "b", "version": "1.1.0"}' > "$dir/packages/b/package.json"
+  git -C "$dir" add .
+  git -C "$dir" commit -m "$msg" --quiet
+  git_tag "$dir" "b-v1.1.0"
+}
+
+# Release `b` 1.1.0 on main while develop carries an unreleased fix to it.
+release_b_beside_develop() {
+  local dir="$1"
+
+  git -C "$dir" checkout -b develop --quiet
+  git_commit "$dir" "fix: develop-only change in b" packages/b/develop.txt
+
+  git -C "$dir" checkout main --quiet
+  release_b "$dir" "chore(release): b@1.1.0"
+}
+
+test_release_tag_merged_back() {
+  # main is merged back into develop, then fast-forwarded: the tagged commit
+  # is listed right behind the merge, ahead of the unreleased develop commit.
+  local dir
+  dir=$(setup_two_packages)
+  release_b_beside_develop "$dir"
+
+  git -C "$dir" checkout develop --quiet
+  git -C "$dir" merge main --no-ff -m "Merge branch 'main' into develop" --quiet
+  git -C "$dir" checkout main --quiet
+  git -C "$dir" merge develop --ff-only --quiet
+
+  run_sr "$dir"
+  run_ours "$dir" b
+  compare "release tag merged back into develop (1.1.1)"
+}
+
+test_branch_merged_after_release() {
+  local dir
+  dir=$(setup_two_packages)
+  release_b_beside_develop "$dir"
+
+  git -C "$dir" merge develop --no-ff -m "Merge branch 'develop'" --quiet
+
+  run_sr "$dir"
+  run_ours "$dir" b
+  compare "branch merged after a release (1.1.1)"
+}
+
+test_release_tags_on_both_sides_of_merge() {
+  # `a` is tagged on a side branch with the older commit date, `b` on main;
+  # neither tag is behind the other, so the side fix to `b` is unreleased.
+  local dir
+  dir=$(setup_two_packages)
+
+  git -C "$dir" checkout -b side --quiet
+  git_commit "$dir" "fix: side-only change in b" packages/b/side.txt
+  echo '{"name": "a", "version": "1.1.0"}' > "$dir/packages/a/package.json"
+  git -C "$dir" add .
+  GIT_COMMITTER_DATE="2020-01-01T00:00:00Z" git -C "$dir" commit -m "chore(release): a@1.1.0" --quiet
+  git_tag "$dir" "a-v1.1.0"
+
+  git -C "$dir" checkout main --quiet
+  release_b "$dir" "chore(release): b@1.1.0"
+  git -C "$dir" merge side --no-ff -m "Merge branch 'side'" --quiet
+
+  run_sr "$dir"
+  run_ours "$dir" b
+  compare "release tags on both sides of a merge (1.1.1)"
+}
+
+test_tag_on_unconventional_commit() {
+  # The tag sits on a commit without a conventional message; what it released
+  # must not be released again.
+  local dir
+  dir=$(setup_two_packages)
+
+  release_b "$dir" "Release b 1.1.0"
+  git_commit "$dir" "chore: unrelated change"
+
+  run_sr "$dir"
+  run_ours "$dir" b
+  compare_no_release "tag on an unconventional commit" 1.1.0
+}
+
 # ── Main ─────────────────────────────────────────────────────────────
 
 main() {
@@ -993,6 +1128,10 @@ main() {
     test_release_branch_out_of_range
     test_maintenance_out_of_range_feat
     test_first_release
+    test_release_tag_merged_back
+    test_branch_merged_after_release
+    test_release_tags_on_both_sides_of_merge
+    test_tag_on_unconventional_commit
   )
 
   echo -e "${DIM}Running ${#tests[@]} tests (${PARALLEL} in parallel)...${NC}"
@@ -1014,8 +1153,9 @@ main() {
       for f in "$RESULTS_DIR"/*; do
         [ -f "$f" ] || continue
         # Skip already printed (use a marker)
-        [ -f "$f.printed" ] && continue
-        touch "$f.printed"
+        local marker="$PRINTED_DIR/${f##*/}"
+        [ -f "$marker" ] && continue
+        touch "$marker"
 
         local status name detail
         status=$(sed -n '1p' "$f")
@@ -1068,7 +1208,6 @@ main() {
   local pass=0 fail=0 skip=0
   for f in "$RESULTS_DIR"/*; do
     [ -f "$f" ] || continue
-    [[ "$f" == *.printed ]] && continue
     case "$(head -1 "$f")" in
       PASS) pass=$((pass + 1)) ;;
       FAIL) fail=$((fail + 1)) ;;

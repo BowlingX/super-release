@@ -29,138 +29,206 @@ pub struct PackageRelease {
 struct PkgTagInfo {
     /// The version to use as the base for calculating the next version.
     current_version: Version,
-    /// The OID to stop commit walking at — may differ from the tag that
-    /// produced `current_version` on prerelease branches.
+    /// The commit whose history is already released — may differ from the tag
+    /// that produced `current_version` on prerelease branches.
     cutoff_oid: Option<git2::Oid>,
     cutoff_tag: Option<String>,
-    /// When true, the cutoff commit itself is included (used for first-release
-    /// packages where the cutoff is the introduction commit, not a release tag).
+    /// When true, the cutoff is the commit that introduced the package (a first
+    /// release, no tag yet): that commit and what followed it are unreleased.
     cutoff_inclusive: bool,
+}
+
+/// What HEAD is while planning releases.
+#[derive(Debug, Clone, Copy)]
+pub enum Head {
+    /// The tip of the release branch.
+    BranchTip,
+    /// A pull-request head previewed against the release branch. That branch's
+    /// tip, when it resolves, carries releases HEAD may not contain yet.
+    Preview { release_tip: Option<git2::Oid> },
+}
+
+impl Head {
+    fn release_tip(self) -> Option<git2::Oid> {
+        match self {
+            Head::BranchTip => None,
+            Head::Preview { release_tip } => release_tip,
+        }
+    }
 }
 
 /// Determine the next version for all packages based on commits since their last release.
 ///
-/// Resolves tags first to find the oldest boundary, then only walks commits
-/// from HEAD to that boundary — avoids parsing the entire git history.
-#[expect(
-    clippy::too_many_lines,
-    reason = "predates the limit; split when next touched"
-)]
+/// Resolves tags first, then only walks the commits not yet released for
+/// every package — avoids parsing the entire git history.
 pub fn determine_releases(
     repo: &Repository,
     repo_path: &Path,
     packages: &[Package],
     config: &Config,
     branch_ctx: &BranchContext,
-    head_is_branch_tip: bool,
+    head: Head,
 ) -> Result<Vec<PackageRelease>> {
     let pkg_pairs: Vec<(String, bool)> = packages
         .iter()
         .map(|p| (p.name.clone(), p.is_root))
         .collect();
-    let tag_index = git::TagIndex::build(repo, &pkg_pairs, config, branch_ctx)?;
+    let release_tip = head.release_tip();
+    let tag_index = git::TagIndex::build(repo, &pkg_pairs, config, branch_ctx, release_tip)?;
 
     let tag_infos: Vec<PkgTagInfo> = packages
         .iter()
-        .map(|pkg| {
-            let latest = tag_index.latest_version(&pkg.name);
+        .map(|pkg| resolve_tag_info(repo, repo_path, pkg, &tag_index, branch_ctx))
+        .collect::<Result<Vec<_>>>()?;
 
-            // On prerelease branches the cutoff must be this channel's own tag, not the
-            // global latest which may sit on another branch and include commits we still need.
-            let channel_tag = branch_ctx
-                .prerelease
-                .as_ref()
-                .and_then(|ch| tag_index.latest_channel_version(&pkg.name, ch));
+    let mut walk = git::get_commits_since(
+        repo,
+        repo_path,
+        walk_boundary(repo, &tag_infos),
+        release_tip,
+    )?;
+    let pkg_commit_indices = commits_by_package(&walk.commits, packages, config);
 
-            let cutoff = channel_tag.as_ref().or(latest.as_ref());
+    // Free file lists now that the inverted index is built.
+    for c in &mut walk.commits {
+        c.files_changed = Vec::new();
+    }
 
-            match cutoff {
-                Some((tag_name, _)) => {
-                    let oid = git::tag_to_oid(repo, tag_name)?;
-                    let current_version = match (&latest, &channel_tag) {
-                        (Some((_, lv)), Some((_, cv))) => lv.max(cv).clone(),
-                        (Some((_, v)), None) | (None, Some((_, v))) => v.clone(),
-                        (None, None) => unreachable!(),
-                    };
-                    Ok(PkgTagInfo {
-                        current_version,
-                        cutoff_oid: oid,
-                        cutoff_tag: Some(tag_name.clone()),
-                        cutoff_inclusive: false,
-                    })
-                }
-                None => {
-                    // First release: use the manifest's introduction commit as cutoff so we
-                    // don't attribute the entire repo history to this new package.
-                    let intro_oid =
-                        git::find_file_introduction_oid(repo, repo_path, &pkg.manifest_path);
-                    // On stable/maintenance branches a prerelease-flavored manifest
-                    // version (e.g. 1.0.0-rc.1) must not leak into stable version
-                    // math — it would ship a prerelease under the release dist-tag.
-                    let current_version =
-                        if branch_ctx.prerelease.is_none() && !pkg.version.pre.is_empty() {
-                            stable_base(&pkg.version)
-                        } else {
-                            pkg.version.clone()
-                        };
-                    Ok(PkgTagInfo {
-                        current_version,
-                        cutoff_oid: intro_oid,
-                        cutoff_tag: None,
-                        cutoff_inclusive: true,
-                    })
-                }
-            }
+    let head_oid = repo.head().ok().and_then(|h| h.target());
+    let scope = ReleaseScope::new(
+        &walk,
+        packages,
+        &tag_infos,
+        &pkg_commit_indices,
+        release_tip.and(head_oid),
+    );
+
+    let releases: Vec<Option<PackageRelease>> = packages
+        .par_iter()
+        .zip(tag_infos.par_iter())
+        .map(|(pkg, tag_info)| {
+            let pkg_commits: Vec<ConventionalCommit> = pkg_commit_indices
+                .get(pkg.name.as_str())
+                .map(|idxs| {
+                    idxs.iter()
+                        .filter(|&&i| scope.is_unreleased(&walk, i, tag_info))
+                        .map(|&i| walk.commits[i].clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            plan_release(pkg, tag_info, pkg_commits, &tag_index, branch_ctx, head)
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Only walk commits since the oldest tag; if any package has no tag (first
-    // release), we must walk the full history.
-    let all_have_tags = tag_infos.iter().all(|t| t.cutoff_tag.is_some());
-    let oldest_tag: Option<&str> = if all_have_tags {
-        find_oldest_tag(repo, &tag_infos)?
-    } else {
-        None
-    };
+    let mut releases: Vec<PackageRelease> = releases.into_iter().flatten().collect();
 
-    let mut all_commits = git::get_commits_since(repo, repo_path, oldest_tag)?;
+    propagate_to_dependents(&mut releases, packages, &tag_infos, &tag_index, branch_ctx)?;
+    check_prerelease_plan(&releases, &tag_index, branch_ctx, head)?;
 
-    // A commit touching a file that matches a global dependency pattern affects ALL packages.
-    let has_ignore = !config.ignore.is_empty();
-    let all_pkg_names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
-    let mut pkg_commit_indices: HashMap<&str, Vec<usize>> = HashMap::new();
+    Ok(releases)
+}
 
-    for (i, c) in all_commits.iter().enumerate() {
-        let relevant_files: Vec<&str> = if has_ignore {
-            c.files_changed
-                .iter()
-                .filter(|f| {
-                    !config
-                        .ignore
-                        .iter()
-                        .any(|pat| crate::config::glob_match(pat, f))
-                })
-                .map(|f| f.as_str())
-                .collect()
-        } else {
-            c.files_changed.iter().map(|f| f.as_str()).collect()
-        };
+/// The version a package is at and the commit that bounds what it has released.
+fn resolve_tag_info(
+    repo: &Repository,
+    repo_path: &Path,
+    pkg: &Package,
+    tag_index: &git::TagIndex,
+    branch_ctx: &BranchContext,
+) -> Result<PkgTagInfo> {
+    let latest = tag_index.latest_version(&pkg.name);
 
-        if relevant_files.is_empty() {
-            continue;
+    // On prerelease branches the cutoff must be this channel's own tag, not the
+    // global latest which may sit on another branch and include commits we still need.
+    let channel_tag = branch_ctx
+        .prerelease
+        .as_ref()
+        .and_then(|ch| tag_index.latest_channel_version(&pkg.name, ch));
+
+    let cutoff = channel_tag.as_ref().or(latest.as_ref());
+
+    match cutoff {
+        Some((tag_name, _)) => {
+            let oid = git::tag_to_oid(repo, tag_name)?;
+            let current_version = match (&latest, &channel_tag) {
+                (Some((_, lv)), Some((_, cv))) => lv.max(cv).clone(),
+                (Some((_, v)), None) | (None, Some((_, v))) => v.clone(),
+                (None, None) => unreachable!(),
+            };
+            Ok(PkgTagInfo {
+                current_version,
+                cutoff_oid: oid,
+                cutoff_tag: Some(tag_name.clone()),
+                cutoff_inclusive: false,
+            })
         }
+        None => {
+            // First release: use the manifest's introduction commit as cutoff so we
+            // don't attribute the entire repo history to this new package.
+            let intro_oid = git::find_file_introduction_oid(repo, repo_path, &pkg.manifest_path);
+            // On stable/maintenance branches a prerelease-flavored manifest
+            // version (e.g. 1.0.0-rc.1) must not leak into stable version
+            // math — it would ship a prerelease under the release dist-tag.
+            let current_version = if branch_ctx.prerelease.is_none() && !pkg.version.pre.is_empty()
+            {
+                stable_base(&pkg.version)
+            } else {
+                pkg.version.clone()
+            };
+            Ok(PkgTagInfo {
+                current_version,
+                cutoff_oid: intro_oid,
+                cutoff_tag: None,
+                cutoff_inclusive: true,
+            })
+        }
+    }
+}
 
-        let touches_global_dep = !config.dependencies.is_empty()
-            && relevant_files.iter().any(|f| {
-                config
-                    .dependencies
-                    .iter()
-                    .any(|pat| crate::config::glob_match(pat, f))
-            });
+/// A commit behind every package's tag, to walk no further than it; `None`
+/// (the full history) when any package has no tag yet.
+fn walk_boundary(repo: &Repository, tag_infos: &[PkgTagInfo]) -> Option<git2::Oid> {
+    if tag_infos.iter().any(|t| t.cutoff_tag.is_none()) {
+        return None;
+    }
+    let mut cutoffs: Vec<git2::Oid> = tag_infos.iter().filter_map(|t| t.cutoff_oid).collect();
+    cutoffs.sort_unstable();
+    cutoffs.dedup();
+    git::common_ancestor(repo, &cutoffs)
+}
 
-        if touches_global_dep {
-            for name in &all_pkg_names {
-                pkg_commit_indices.entry(name).or_default().push(i);
+/// Per package, the indices of the commits that touch it. A commit touching a
+/// file that matches a global dependency pattern affects ALL packages.
+fn commits_by_package<'a>(
+    commits: &[ConventionalCommit],
+    packages: &'a [Package],
+    config: &Config,
+) -> HashMap<&'a str, Vec<usize>> {
+    let ignored = |f: &str| {
+        config
+            .ignore
+            .iter()
+            .any(|pat| crate::config::glob_match(pat, f))
+    };
+    let global_dep = |f: &str| {
+        config
+            .dependencies
+            .iter()
+            .any(|pat| crate::config::glob_match(pat, f))
+    };
+    let mut indices: HashMap<&str, Vec<usize>> = HashMap::new();
+
+    for (i, c) in commits.iter().enumerate() {
+        let relevant_files: Vec<&str> = c
+            .files_changed
+            .iter()
+            .map(String::as_str)
+            .filter(|f| !ignored(f))
+            .collect();
+
+        if relevant_files.iter().any(|f| global_dep(f)) {
+            for pkg in packages {
+                indices.entry(pkg.name.as_str()).or_default().push(i);
             }
         } else {
             // Deduplicate: a commit touching multiple files in the same package
@@ -169,153 +237,202 @@ pub fn determine_releases(
                 if let Some(pkg) = file_to_package(f, packages)
                     && seen.insert(pkg.name.as_str())
                 {
-                    pkg_commit_indices
-                        .entry(pkg.name.as_str())
-                        .or_default()
-                        .push(i);
+                    indices.entry(pkg.name.as_str()).or_default().push(i);
                 }
             }
         }
     }
+    indices
+}
 
-    // Free file lists now that the inverted index is built.
-    for c in &mut all_commits {
-        c.files_changed = Vec::new();
+/// Which commits of a walk each package has yet to release.
+struct ReleaseScope {
+    /// HEAD's history, when the walk also covers the release branch's tip.
+    head: Option<git::CommitSet>,
+    /// Per tag cutoff, what it released: the tagged commit and its history.
+    released: HashMap<git2::Oid, git::CommitSet>,
+    /// Per first-release cutoff, the commit that introduced the package and
+    /// what followed it.
+    introduced: HashMap<git2::Oid, git::CommitSet>,
+}
+
+impl ReleaseScope {
+    /// Packages released together share a cutoff: one set per distinct one,
+    /// and none for packages without commits.
+    fn new(
+        walk: &git::CommitWalk,
+        packages: &[Package],
+        tag_infos: &[PkgTagInfo],
+        pkg_commit_indices: &HashMap<&str, Vec<usize>>,
+        preview_head: Option<git2::Oid>,
+    ) -> Self {
+        let cutoffs = |inclusive: bool| -> HashSet<git2::Oid> {
+            packages
+                .iter()
+                .zip(tag_infos)
+                .filter(|(pkg, t)| {
+                    t.cutoff_inclusive == inclusive
+                        && pkg_commit_indices.contains_key(pkg.name.as_str())
+                })
+                .filter_map(|(_, t)| t.cutoff_oid)
+                .collect()
+        };
+        ReleaseScope {
+            head: preview_head
+                .map(|oid| walk.reachable_from(oid).unwrap_or_else(|| walk.empty_set())),
+            released: cutoffs(false)
+                .into_par_iter()
+                .filter_map(|oid| Some((oid, walk.reachable_from(oid)?)))
+                .collect(),
+            introduced: cutoffs(true)
+                .into_par_iter()
+                .filter_map(|oid| Some((oid, walk.descended_from(oid)?)))
+                .collect(),
+        }
     }
 
-    // Build OID→index map for O(1) cutoff lookups.
-    let oid_to_idx: HashMap<git2::Oid, usize> = all_commits
+    /// A cutoff the walk did not read is behind its boundary: it bounds nothing.
+    fn is_unreleased(&self, walk: &git::CommitWalk, index: usize, tag_info: &PkgTagInfo) -> bool {
+        if self.head.as_ref().is_some_and(|h| !walk.contains(h, index)) {
+            return false;
+        }
+        let Some(cutoff) = tag_info.cutoff_oid else {
+            return true;
+        };
+        if tag_info.cutoff_inclusive {
+            self.introduced
+                .get(&cutoff)
+                .is_none_or(|set| walk.contains(set, index))
+        } else {
+            self.released
+                .get(&cutoff)
+                .is_none_or(|set| !walk.contains(set, index))
+        }
+    }
+}
+
+/// The release of one package from its unreleased commits, if they call for one.
+fn plan_release(
+    pkg: &Package,
+    tag_info: &PkgTagInfo,
+    pkg_commits: Vec<ConventionalCommit>,
+    tag_index: &git::TagIndex,
+    branch_ctx: &BranchContext,
+    head: Head,
+) -> Result<Option<PackageRelease>> {
+    // On maintenance branches, skip packages whose version is outside the range.
+    if branch_ctx.maintenance
+        && let Some(ref range) = branch_ctx.maintenance_range
+        && !version_in_maintenance_range(&tag_info.current_version, range)
+    {
+        return Ok(None);
+    }
+
+    // Per package: a revert whose target is already released stays
+    // alone in this package's range and yields a patch.
+    let pkg_commits = crate::commit::filter_reverted_commits(pkg_commits);
+
+    if pkg_commits.is_empty() {
+        return Ok(None);
+    }
+
+    let next_version = calculate_next_version(&tag_info.current_version, &pkg_commits, branch_ctx)?;
+
+    if next_version == tag_info.current_version {
+        return Ok(None);
+    }
+
+    // This version already exists as a tag on another branch (collision). A
+    // preview's checkout may just be behind that release, so it only warns.
+    if next_version.pre.is_empty() && tag_index.version_exists(&pkg.name, &next_version) {
+        match head {
+            Head::BranchTip => anyhow::bail!(
+                "Version {} for '{}' already exists as a tag. \
+                 Branch '{}' cannot release this version \
+                 because it was already released on another branch.",
+                next_version,
+                pkg.name,
+                branch_ctx.branch_name,
+            ),
+            Head::Preview { .. } => warn_checkout_behind(&pkg.name, &next_version, branch_ctx),
+        }
+    }
+
+    let bump = classify_bump(
+        &tag_info.current_version,
+        &next_version,
+        branch_ctx.prerelease.as_deref(),
+    );
+
+    if bump > BumpLevel::None {
+        Ok(Some(PackageRelease {
+            package_name: pkg.name.clone(),
+            current_version: tag_info.current_version.clone(),
+            next_version,
+            bump,
+            commits: pkg_commits,
+            is_root: pkg.is_root,
+            propagated_from: None,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+fn warn_checkout_behind(package_name: &str, version: &Version, branch_ctx: &BranchContext) {
+    eprintln!(
+        "  [version] Warning: version {} for '{}' already exists as a tag not \
+         reachable from HEAD — the checkout may be behind the latest '{}' release",
+        version, package_name, branch_ctx.branch_name
+    );
+}
+
+/// Tripwire: a prerelease-configured branch must never plan a stable release,
+/// no matter which path produced the version. Releases the branch's package
+/// allowlist will drop are exempt — they are never published.
+fn check_prerelease_plan(
+    releases: &[PackageRelease],
+    tag_index: &git::TagIndex,
+    branch_ctx: &BranchContext,
+    head: Head,
+) -> Result<()> {
+    let Some(ref channel) = branch_ctx.prerelease else {
+        return Ok(());
+    };
+    for r in releases
         .iter()
-        .enumerate()
-        .filter_map(|(i, c)| c.oid.map(|oid| (oid, i)))
-        .collect();
-
-    let releases: Vec<Option<PackageRelease>> = packages
-        .par_iter()
-        .zip(tag_infos.par_iter())
-        .map(|(pkg, tag_info)| {
-            // On maintenance branches, skip packages whose version is outside the range.
-            if branch_ctx.maintenance
-                && let Some(ref range) = branch_ctx.maintenance_range
-                && !version_in_maintenance_range(&tag_info.current_version, range)
-            {
-                return Ok(None);
-            }
-
-            let cutoff_idx = tag_info
-                .cutoff_oid
-                .and_then(|cutoff| oid_to_idx.get(&cutoff).copied());
-            let inclusive = tag_info.cutoff_inclusive;
-
-            let pkg_commits: Vec<ConventionalCommit> = pkg_commit_indices
-                .get(pkg.name.as_str())
-                .map(|idxs| {
-                    idxs.iter()
-                        .filter(|&&i| match cutoff_idx {
-                            Some(cut) if inclusive => i <= cut,
-                            Some(cut) => i < cut,
-                            None => true,
-                        })
-                        .map(|&i| all_commits[i].clone())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            // Per package: a revert whose target is already released stays
-            // alone in this package's range and yields a patch.
-            let pkg_commits = crate::commit::filter_reverted_commits(pkg_commits);
-
-            if pkg_commits.is_empty() {
-                return Ok(None);
-            }
-
-            let next_version =
-                calculate_next_version(&tag_info.current_version, &pkg_commits, branch_ctx)?;
-
-            if next_version == tag_info.current_version {
-                return Ok(None);
-            }
-
-            // Fail if this version already exists as a tag on another branch (collision).
-            if next_version.pre.is_empty() && tag_index.version_exists(&pkg.name, &next_version) {
-                anyhow::bail!(
-                    "Version {} for '{}' already exists as a tag. \
-                     Branch '{}' cannot release this version \
-                     because it was already released on another branch.",
-                    next_version,
-                    pkg.name,
-                    branch_ctx.branch_name,
-                );
-            }
-
-            let bump = classify_bump(
-                &tag_info.current_version,
-                &next_version,
-                branch_ctx.prerelease.as_deref(),
+        .filter(|r| branch_ctx.includes_package(&r.package_name))
+    {
+        if !prerelease_matches_channel(r.next_version.pre.as_str(), channel) {
+            anyhow::bail!(
+                "Internal error: planned version {} for '{}' is not on prerelease channel '{}'",
+                r.next_version,
+                r.package_name,
+                channel,
             );
-
-            if bump > BumpLevel::None {
-                Ok(Some(PackageRelease {
-                    package_name: pkg.name.clone(),
-                    current_version: tag_info.current_version.clone(),
-                    next_version,
-                    bump,
-                    commits: pkg_commits,
-                    is_root: pkg.is_root,
-                    propagated_from: None,
-                }))
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut releases: Vec<PackageRelease> = releases.into_iter().flatten().collect();
-
-    propagate_to_dependents(&mut releases, packages, &tag_infos, &tag_index, branch_ctx)?;
-
-    // Tripwire: a prerelease-configured branch must never plan a stable release,
-    // no matter which path produced the version. Releases the branch's package
-    // allowlist will drop are exempt — they are never published.
-    if let Some(ref channel) = branch_ctx.prerelease {
-        for r in releases
-            .iter()
-            .filter(|r| branch_ctx.includes_package(&r.package_name))
-        {
-            if !prerelease_matches_channel(r.next_version.pre.as_str(), channel) {
-                anyhow::bail!(
-                    "Internal error: planned version {} for '{}' is not on prerelease channel '{}'",
+        }
+        // A planned version can only equal an existing tag when that tag is
+        // not reachable from HEAD (otherwise it would have been the base and
+        // the plan would sit above it) — the branch has stale channel tags.
+        // That reasoning assumes HEAD is the branch tip; previews check out
+        // PR heads instead, so they warn rather than fail.
+        if tag_index.version_exists(&r.package_name, &r.next_version) {
+            match head {
+                Head::BranchTip => anyhow::bail!(
+                    "Version {} for '{}' already exists as a tag but is not reachable \
+                     from branch '{}'. The branch was likely rebased or force-pushed — \
+                     fetch tags and fast-forward, or delete the stale tag.",
                     r.next_version,
                     r.package_name,
-                    channel,
-                );
-            }
-            // A planned version can only equal an existing tag when that tag is
-            // not reachable from HEAD (otherwise it would have been the base and
-            // the plan would sit above it) — the branch has stale channel tags.
-            // That reasoning assumes HEAD is the branch tip; previews check out
-            // PR heads instead, so they warn rather than fail.
-            if tag_index.version_exists(&r.package_name, &r.next_version) {
-                if head_is_branch_tip {
-                    anyhow::bail!(
-                        "Version {} for '{}' already exists as a tag but is not reachable \
-                         from branch '{}'. The branch was likely rebased or force-pushed — \
-                         fetch tags and fast-forward, or delete the stale tag.",
-                        r.next_version,
-                        r.package_name,
-                        branch_ctx.branch_name,
-                    );
+                    branch_ctx.branch_name,
+                ),
+                Head::Preview { .. } => {
+                    warn_checkout_behind(&r.package_name, &r.next_version, branch_ctx);
                 }
-                eprintln!(
-                    "  [version] Warning: version {} for '{}' already exists as a tag not \
-                     reachable from HEAD — the checkout may be behind the latest '{}' release",
-                    r.next_version, r.package_name, branch_ctx.branch_name
-                );
             }
         }
     }
-
-    Ok(releases)
+    Ok(())
 }
 
 /// Recursively propagate releases through the reverse dependency graph.
@@ -434,28 +551,6 @@ fn propagated_next_version(current: &Version, branch_ctx: &BranchContext) -> Res
 /// The stable part of a version — prerelease and build metadata stripped.
 fn stable_base(v: &Version) -> Version {
     Version::new(v.major, v.minor, v.patch)
-}
-
-/// Find the oldest tag among all packages by comparing commit timestamps.
-fn find_oldest_tag<'a>(repo: &Repository, tag_infos: &'a [PkgTagInfo]) -> Result<Option<&'a str>> {
-    let mut oldest: Option<(&str, i64)> = None;
-
-    for info in tag_infos {
-        if let (Some(tag), Some(oid)) = (&info.cutoff_tag, info.cutoff_oid) {
-            let commit = repo.find_commit(oid)?;
-            let time = commit.time().seconds();
-            let tag_str: &'a str = tag;
-            match oldest {
-                None => oldest = Some((tag_str, time)),
-                Some((_, oldest_time)) if time < oldest_time => {
-                    oldest = Some((tag_str, time));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Ok(oldest.map(|(tag, _)| tag))
 }
 
 fn calculate_next_version(

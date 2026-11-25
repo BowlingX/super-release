@@ -206,8 +206,14 @@ fn main() -> Result<()> {
         printfl!();
     });
 
-    let mut releases =
-        version::determine_releases(&repo, &repo_root, &packages, &cfg, &branch_ctx, true)?;
+    let mut releases = version::determine_releases(
+        &repo,
+        &repo_root,
+        &packages,
+        &cfg,
+        &branch_ctx,
+        version::Head::BranchTip,
+    )?;
 
     let skipped = run::apply_branch_package_filter(&mut releases, &branch_ctx);
     verbosefl!(verbose_mode, {

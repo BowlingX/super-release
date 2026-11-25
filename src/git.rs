@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use git2::Repository;
 use indicatif::{ProgressBar, ProgressStyle};
 use semver::Version;
-use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::Entry;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::path::Path;
 
 use crate::commit::{ConventionalCommit, parse_conventional_commit};
@@ -24,6 +25,7 @@ impl TagIndex {
         packages: &[(String, bool)], // (name, is_root) pairs
         config: &Config,
         branch_ctx: &BranchContext,
+        also_reachable_from: Option<git2::Oid>,
     ) -> Result<Self> {
         let tag_names = repo.tag_names(None)?;
         let pkg_regexes: Vec<(&str, bool, Option<regex::Regex>)> = packages
@@ -95,12 +97,16 @@ impl TagIndex {
             }
         }
 
-        // Single revwalk from HEAD — stops as soon as all candidate OIDs are found.
+        // Single revwalk from HEAD (and `also_reachable_from`) — stops as soon as
+        // all candidate OIDs are found.
         let mut reachable: HashSet<git2::Oid> = HashSet::new();
         if !pending_oids.is_empty() {
             let mut remaining = pending_oids;
             let mut revwalk = repo.revwalk()?;
             revwalk.push_head()?;
+            if let Some(tip) = also_reachable_from {
+                revwalk.push(tip)?;
+            }
 
             for oid in revwalk {
                 let oid = oid?;
@@ -200,35 +206,127 @@ fn version_matches_branch(v: &Version, branch_ctx: &BranchContext) -> bool {
     }
 }
 
-/// Get all commits from HEAD, optionally stopping at a tag boundary.
-/// Uses `git log --name-only` for fast file-change detection (leverages git's pack caching).
-pub fn get_commits_since(
-    _repo: &Repository,
-    repo_path: &Path,
-    since_tag: Option<&str>,
-) -> Result<Vec<ConventionalCommit>> {
-    use std::io::BufReader;
-    use std::process::{Command, Stdio};
+/// The commits read by [`get_commits_since`], with the parent links of every
+/// commit in the walk (conventional or not).
+#[derive(Default)]
+pub struct CommitWalk {
+    /// Conventional commits, in topological order (children before parents).
+    pub commits: Vec<ConventionalCommit>,
+    /// Walk position of each entry of `commits`.
+    positions: Vec<u32>,
+    /// Walk position of every commit read.
+    position_of: HashMap<git2::Oid, u32>,
+    /// In-walk parents by walk position.
+    parents: Vec<Vec<u32>>,
+}
 
+/// Commits of a [`CommitWalk`]: one bit per walk position.
+pub struct CommitSet(Vec<u64>);
+
+impl CommitSet {
+    fn insert(&mut self, position: u32) -> bool {
+        let (word, bit) = (position as usize / 64, 1u64 << (position % 64));
+        let new = self.0[word] & bit == 0;
+        self.0[word] |= bit;
+        new
+    }
+
+    fn has(&self, position: u32) -> bool {
+        self.0[position as usize / 64] & (1u64 << (position % 64)) != 0
+    }
+}
+
+impl CommitWalk {
+    pub fn empty_set(&self) -> CommitSet {
+        CommitSet(vec![0; self.parents.len().div_ceil(64)])
+    }
+
+    /// `oid` and the commits of the walk reachable from it; `None` when the
+    /// walk did not read `oid`.
+    ///
+    /// A release boundary must be applied with this, not with the position of
+    /// the boundary commit in the walk: after a merge, commits that are not
+    /// part of the tagged release can be listed behind the tagged commit.
+    pub fn reachable_from(&self, oid: git2::Oid) -> Option<CommitSet> {
+        let mut set = self.empty_set();
+        let mut stack = vec![*self.position_of.get(&oid)?];
+        while let Some(next) = stack.pop() {
+            if set.insert(next) {
+                stack.extend(&self.parents[next as usize]);
+            }
+        }
+        Some(set)
+    }
+
+    /// `oid` and the commits of the walk it is reachable from; `None` when the
+    /// walk did not read `oid`.
+    pub fn descended_from(&self, oid: git2::Oid) -> Option<CommitSet> {
+        let of = *self.position_of.get(&oid)?;
+        let mut set = self.empty_set();
+        set.insert(of);
+        // Children are listed before their parents.
+        for position in (0..of).rev() {
+            if self.parents[position as usize].iter().any(|&p| set.has(p)) {
+                set.insert(position);
+            }
+        }
+        Some(set)
+    }
+
+    /// Whether `commits[index]` is in `set`.
+    pub fn contains(&self, set: &CommitSet, index: usize) -> bool {
+        set.has(self.positions[index])
+    }
+}
+
+/// The raw `git log` of the commits reachable from HEAD (and from
+/// `also_from`) but not from `since`, one `\x1e`-led record per commit.
+fn read_git_log(
+    repo_path: &Path,
+    since: Option<git2::Oid>,
+    also_from: Option<git2::Oid>,
+) -> Result<String> {
     // `%n%x1f` emits the \x1f sentinel regardless of whether the body ends with a
     // newline — some tools (e.g. GitHub's squash-merge API) omit it, and blank-line
     // counting would otherwise silently drop `files_changed`.
-    let mut cmd = Command::new("git");
+    let mut cmd = std::process::Command::new("git");
     cmd.args([
         "log",
-        "--format=%x1e%H%x09%B%n%x1f",
+        "--format=%x1e%H%x09%P%x09%B%n%x1f",
         "--name-only",
         "--topo-order",
+        "HEAD",
     ])
-    .current_dir(repo_path)
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null());
-
-    if let Some(tag) = since_tag {
-        cmd.arg(format!("{}..HEAD", tag));
+    .current_dir(repo_path);
+    if let Some(tip) = also_from {
+        cmd.arg(tip.to_string());
+    }
+    if let Some(since) = since {
+        cmd.arg(format!("^{since}"));
     }
 
-    let mut child = cmd.spawn().context("Failed to run git log")?;
+    let output = cmd.output().context("Failed to run git log")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git log failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Get the commits reachable from HEAD (and from `also_from`), optionally only
+/// those not reachable from `since`.
+/// Uses `git log --name-only` for fast file-change detection (leverages git's pack caching).
+pub fn get_commits_since(
+    repo: &Repository,
+    repo_path: &Path,
+    since: Option<git2::Oid>,
+    also_from: Option<git2::Oid>,
+) -> Result<CommitWalk> {
+    if matches!(repo.head(), Err(e) if e.code() == git2::ErrorCode::UnbornBranch) {
+        return Ok(CommitWalk::default());
+    }
 
     let spinner = ProgressBar::new_spinner();
     spinner.set_style(
@@ -238,15 +336,14 @@ pub fn get_commits_since(
     );
     spinner.enable_steady_tick(std::time::Duration::from_millis(80));
 
-    let mut raw_output = String::new();
-    if let Some(stdout) = child.stdout.take() {
-        use std::io::Read;
-        let mut reader = BufReader::new(stdout);
-        reader.read_to_string(&mut raw_output)?;
-    }
-    child.wait()?;
+    let raw_output = read_git_log(repo_path, since, also_from).inspect_err(|_| {
+        spinner.finish_and_clear();
+    })?;
 
     let mut commits = Vec::new();
+    let mut positions = Vec::new();
+    let mut position_of: HashMap<git2::Oid, u32> = HashMap::new();
+    let mut parent_oids: Vec<Vec<git2::Oid>> = Vec::new();
 
     for record in raw_output.split('\x1e') {
         if record.is_empty() {
@@ -261,9 +358,23 @@ pub fn get_commits_since(
         let Some(header) = msg_lines.next() else {
             continue;
         };
-        let Some((hash, first_msg_line)) = header.split_once('\t') else {
+        let Some((hash, rest)) = header.split_once('\t') else {
             continue;
         };
+        let Some((parent_hashes, first_msg_line)) = rest.split_once('\t') else {
+            continue;
+        };
+        let Ok(oid) = git2::Oid::from_str(hash) else {
+            continue;
+        };
+        let position = parent_oids.len() as u32;
+        position_of.insert(oid, position);
+        parent_oids.push(
+            parent_hashes
+                .split(' ')
+                .filter_map(|p| git2::Oid::from_str(p).ok())
+                .collect(),
+        );
 
         let mut message_lines = vec![first_msg_line.to_string()];
         for line in msg_lines {
@@ -283,15 +394,121 @@ pub fn get_commits_since(
         let hash8 = &hash[..8.min(hash.len())];
 
         if let Some(mut parsed) = parse_conventional_commit(hash8, &full_message) {
-            parsed.oid = git2::Oid::from_str(hash).ok();
+            parsed.oid = Some(oid);
             parsed.files_changed = files;
             commits.push(parsed);
+            positions.push(position);
             spinner.tick();
         }
     }
 
     spinner.finish_and_clear();
-    Ok(commits)
+
+    // Parents behind the walk's boundary were not read and are dropped.
+    let parents = parent_oids
+        .iter()
+        .map(|oids| {
+            oids.iter()
+                .filter_map(|oid| position_of.get(oid).copied())
+                .collect()
+        })
+        .collect();
+
+    Ok(CommitWalk {
+        commits,
+        positions,
+        position_of,
+        parents,
+    })
+}
+
+/// The commit `branch` points at: its remote-tracking ref when there is one,
+/// else the local branch.
+pub fn branch_tip(repo: &Repository, remote: &str, branch: &str) -> Option<git2::Oid> {
+    [
+        format!("refs/remotes/{remote}/{branch}"),
+        format!("refs/heads/{branch}"),
+    ]
+    .iter()
+    .find_map(|name| Some(repo.find_reference(name).ok()?.peel_to_commit().ok()?.id()))
+}
+
+/// A commit every one of `oids` descends from (or is); `None` without one.
+///
+/// Any such commit bounds the walk, so this takes the first one a single pass
+/// finds: `merge_base_octopus` runs one graph walk per commit instead.
+pub fn common_ancestor(repo: &Repository, oids: &[git2::Oid]) -> Option<git2::Oid> {
+    struct Visit {
+        /// The `oids` (one bit each) this commit is reachable from.
+        reached: Vec<u64>,
+        time: i64,
+        parents: Vec<git2::Oid>,
+        queued: bool,
+    }
+
+    if let [only] = oids {
+        return Some(*only);
+    }
+    let words = oids.len().div_ceil(64);
+    let load = |oid: git2::Oid| {
+        let commit = repo.find_commit(oid).ok()?;
+        Some(Visit {
+            reached: vec![0; words],
+            time: commit.time().seconds(),
+            parents: commit.parent_ids().collect(),
+            queued: false,
+        })
+    };
+
+    let mut visits: HashMap<git2::Oid, Visit> = HashMap::new();
+    let mut queue = BinaryHeap::new();
+    for (i, &oid) in oids.iter().enumerate() {
+        let visit = match visits.entry(oid) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(load(oid)?),
+        };
+        visit.reached[i / 64] |= 1 << (i % 64);
+        if !visit.queued {
+            visit.queued = true;
+            queue.push((visit.time, oid));
+        }
+    }
+
+    // Newest first, so a commit is usually visited after its children; one
+    // that is reached from more of `oids` later is queued again.
+    while let Some((_, oid)) = queue.pop() {
+        let visit = visits.get_mut(&oid)?;
+        visit.queued = false;
+        let reached = visit.reached.clone();
+        if reached
+            .iter()
+            .map(|w| w.count_ones() as usize)
+            .sum::<usize>()
+            == oids.len()
+        {
+            return Some(oid);
+        }
+        for parent in visit.parents.clone() {
+            let seen = match visits.entry(parent) {
+                Entry::Occupied(entry) => entry.into_mut(),
+                // A parent missing from a shallow clone ends that line of history.
+                Entry::Vacant(entry) => match load(parent) {
+                    Some(visit) => entry.insert(visit),
+                    None => continue,
+                },
+            };
+            let mut gained = false;
+            for (have, new) in seen.reached.iter_mut().zip(&reached) {
+                gained |= *new & !*have != 0;
+                *have |= new;
+            }
+            if gained && !seen.queued {
+                seen.queued = true;
+                queue.push((seen.time, parent));
+            }
+        }
+    }
+    None
 }
 
 /// Find the commit OID that first introduced a file (e.g. a package manifest).
