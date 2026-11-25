@@ -306,7 +306,8 @@ notes apply. Use a merge commit for release PRs.
 
 1. **Discover packages** -- finds all directories with a `package.json` (respects `.gitignore`)
 2. **Resolve tags** -- finds the latest release tag per package (filtered by branch context, only reachable from HEAD)
-3. **Walk commits** -- only analyzes commits since the oldest tag (not the entire history)
+3. **Walk commits** -- only analyzes commits not yet released for every package (not the entire history); a
+   package's unreleased commits are those not reachable from its latest tag, so merged branches are handled
 4. **Associate commits to packages** -- maps changed files to their owning package (respects `dependencies` and `ignore`
    config)
 5. **Calculate versions** -- determines bump levels from conventional commits
@@ -758,7 +759,7 @@ branches:
 
 ## Performance
 
-- **Tag-bounded history walk**: only walks commits since the oldest package tag
+- **Tag-bounded history walk**: only walks commits that are not behind every package's latest tag
 - **Single-pass commit collection**: commits fetched once, partitioned per package
 - **Reachable-only tags**: single revwalk to check tag reachability, stops early
 

@@ -901,13 +901,9 @@ fn test_prerelease_allowlist_excluded_stale_tag_does_not_block_run() {
     );
 }
 
-#[test]
-fn test_preview_warns_instead_of_failing_on_unreachable_channel_tag() {
-    // Previews check out PR heads, where the latest channel tag is routinely
-    // not reachable — the stale-tag protection must warn, not abort.
-    let dir = TempDir::new().unwrap();
-    let root = dir.path();
-
+/// The release branch released `.1`, a PR branch forked there, and the
+/// release branch then released `.2`. Leaves the PR branch checked out.
+fn setup_pr_behind_channel_release(root: &std::path::Path) {
     setup_monorepo(root, &[("@test/core", "1.0.0", "")], PRERELEASE_CONFIG);
 
     git(root, &["checkout", "-b", "test-branch"]);
@@ -916,7 +912,6 @@ fn test_preview_warns_instead_of_failing_on_unreachable_channel_tag() {
     git(root, &["commit", "-m", "fix: first"]);
     tag(root, "@test/core/v1.0.1-test-branch.1");
 
-    // PR branch forks here; the release branch then moves on with another release.
     git(root, &["checkout", "-b", "feature-pr"]);
     git(root, &["checkout", "test-branch"]);
     fs::write(root.join("packages/core/src/index.ts"), "// second").unwrap();
@@ -928,13 +923,50 @@ fn test_preview_warns_instead_of_failing_on_unreachable_channel_tag() {
     fs::write(root.join("packages/core/src/index.ts"), "// pr change").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "fix: pr change"]);
+}
 
-    let output = super_release_bin()
+fn preview(root: &std::path::Path) -> std::process::Output {
+    super_release_bin()
         .args(["--preview", "--base", "test-branch", "--no-comment"])
         .arg("-C")
         .arg(root.to_str().unwrap())
         .output()
-        .unwrap();
+        .unwrap()
+}
+
+#[test]
+fn test_preview_plans_above_a_release_the_pr_head_is_behind() {
+    // Previews check out PR heads, where the latest channel tag is routinely
+    // not reachable — it still is the release the PR lands on top of.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_pr_behind_channel_release(root);
+
+    let output = preview(root);
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("`1.0.1-test-branch.2` → `1.0.1-test-branch.3`"),
+        "Preview should plan above the release branch's latest release:\n{}",
+        stdout
+    );
+}
+
+#[test]
+fn test_preview_warns_instead_of_failing_on_unreachable_channel_tag() {
+    // Without a ref for the release branch its latest tag stays unreachable —
+    // the stale-tag protection must warn, not abort.
+    let dir = TempDir::new().unwrap();
+    let root = dir.path();
+    setup_pr_behind_channel_release(root);
+    git(root, &["branch", "-D", "test-branch"]);
+
+    let output = preview(root);
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

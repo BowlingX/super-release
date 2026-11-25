@@ -408,9 +408,13 @@ pub fn run_preview(
             packages: Vec::new(),
         });
 
-    // Previews check out PR heads, so HEAD is not the release branch's tip.
+    // Previews check out PR heads, so HEAD is not the release branch's tip:
+    // what that branch has released since counts as released.
+    let head = version::Head::Preview {
+        release_tip: git::branch_tip(repo, &cfg.git.remote, &base_branch),
+    };
     let mut releases =
-        version::determine_releases(repo, repo_root, packages, cfg, &branch_ctx, false)?;
+        version::determine_releases(repo, repo_root, packages, cfg, &branch_ctx, head)?;
     apply_branch_package_filter(&mut releases, &branch_ctx);
 
     // Only preview notes for packages a `changelog` step would cover on this branch, mirroring the per-step branch + package filtering.
