@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.18.1] - 2026-11-25
+
+### 🐛 Bug Fixes
+
+- Bound each package's release by tag ancestry, not walk position, added e2e tests, gh lockfiles (#83)
 ## [1.18.0] - 2026-10-30
 
 ### ✍️ Release notes
