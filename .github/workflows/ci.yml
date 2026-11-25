@@ -90,7 +90,7 @@ jobs:
 
       - name: Install cross
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        uses: taiki-e/install-action@v2.88.0
+        uses: taiki-e/install-action@v2.90.8
         with:
           tool: cross
 
